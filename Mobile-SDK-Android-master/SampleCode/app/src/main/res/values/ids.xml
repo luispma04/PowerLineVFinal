@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="btn_load_csv" type="id" />
+    <item name="btn_next_photo" type="id" />
+    <item name="btn_adjust_position" type="id" />
+    <item name="btn_take_photo" type="id" />
+    <item name="btn_start_mission" type="id" />
+    <item name="btn_stop_mission" type="id" />
+    <item name="text_mission_info" type="id" />
+    <item name="text_csv_info" type="id" />
+    <item name="tv_fc_push_info" type="id" />
+</resources>
