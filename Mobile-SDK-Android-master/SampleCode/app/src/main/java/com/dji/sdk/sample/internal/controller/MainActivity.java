@@ -35,7 +35,11 @@ import com.squareup.otto.Subscribe;
 
 import java.util.Stack;
 
+import dji.common.error.DJIError;
+import dji.common.error.DJISDKError;
+import dji.sdk.base.BaseComponent;
 import dji.sdk.base.BaseProduct;
+import dji.sdk.sdkmanager.DJISDKInitEvent;
 import dji.sdk.sdkmanager.DJISDKManager;
 
 public class MainActivity extends AppCompatActivity implements StructureInspectionMissionView.FilePickerCallback {
@@ -53,6 +57,10 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
     private MenuItem searchViewItem;
     private MenuItem hintItem;
 
+    // Track SDK registration status
+    private boolean isRegistrationInProgress = false;
+    private StructureInspectionMissionView structureView;
+
     //region Life-cycle
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,7 +69,136 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
         setContentView(R.layout.activity_main);
         setupActionBar();
         contentFrameLayout = (FrameLayout) findViewById(R.id.framelayout_content);
-        initParams();
+
+        // Get the progress bar
+        progressBar = (ProgressBar) findViewById(R.id.progress_bar);
+
+        // Setup animations and stack
+        setupInAnimations();
+        stack = new Stack<ViewWrapper>();
+
+        // Create the Structure Inspection Mission View
+        structureView = new StructureInspectionMissionView(this);
+
+        // Remove any existing views in the content frame
+        if (contentFrameLayout.getChildCount() > 0) {
+            contentFrameLayout.removeAllViews();
+        }
+
+        // Add the structure view to the content frame
+        contentFrameLayout.addView(structureView);
+
+        // Push the view to the stack with the appropriate title
+        stack.push(new ViewWrapper(structureView, R.string.component_listview_structure_inspection_mission));
+
+        // Refresh the title
+        refreshTitle();
+        refreshOptionsMenu();
+
+        // Initialize DJI SDK if not already done
+        startSDKRegistration();
+    }
+
+    private void startSDKRegistration() {
+        if (isRegistrationInProgress) {
+            return;
+        }
+
+        isRegistrationInProgress = true;
+
+        // Show progress bar for registration
+        if (progressBar != null) {
+            progressBar.setVisibility(View.VISIBLE);
+        }
+
+        // Initialize and register the SDK
+        DJISDKManager.getInstance().registerApp(this.getApplicationContext(), new DJISDKManager.SDKManagerCallback() {
+            @Override
+            public void onRegister(DJIError djiError) {
+                isRegistrationInProgress = false;
+                if (progressBar != null) {
+                    progressBar.setVisibility(View.GONE);
+                }
+
+                if (djiError == DJISDKError.REGISTRATION_SUCCESS) {
+                    // SDK registered successfully
+                    DJISDKManager.getInstance().startConnectionToProduct();
+                    ToastUtils.setResultToToast("SDK registered successfully");
+                    // Update connection status in StructureInspectionMissionView
+                    if (structureView != null) {
+                        structureView.updateStatus("SDK registered successfully");
+                    }
+                } else {
+                    ToastUtils.setResultToToast("SDK registration failed: " + djiError.getDescription());
+                    // Update connection status in StructureInspectionMissionView
+                    if (structureView != null) {
+                        structureView.updateStatus("SDK registration failed: " + djiError.getDescription());
+                    }
+                }
+            }
+
+            @Override
+            public void onProductDisconnect() {
+                ToastUtils.setResultToToast("Aircraft disconnected");
+                // Update connection status in StructureInspectionMissionView
+                if (structureView != null) {
+                    structureView.updateStatus("Aircraft disconnected");
+                }
+            }
+
+            @Override
+            public void onProductConnect(BaseProduct baseProduct) {
+                ToastUtils.setResultToToast("Aircraft connected");
+                // Update connection status in StructureInspectionMissionView
+                if (structureView != null) {
+                    structureView.onProductConnected();
+                    structureView.updateStatus("Aircraft connected");
+                }
+            }
+
+            @Override
+            public void onProductChanged(BaseProduct baseProduct) {
+                ToastUtils.setResultToToast("Aircraft changed");
+                // Update connection status in StructureInspectionMissionView
+                if (structureView != null) {
+                    structureView.updateStatus("Aircraft changed");
+                }
+            }
+
+            @Override
+            public void onComponentChange(BaseProduct.ComponentKey componentKey, BaseComponent oldComponent, BaseComponent newComponent) {
+                // Component changed
+                if (newComponent != null) {
+                    newComponent.setComponentListener(new BaseComponent.ComponentListener() {
+                        @Override
+                        public void onConnectivityChange(boolean isConnected) {
+                            String componentName = componentKey.name();
+                            ToastUtils.setResultToToast(componentName + (isConnected ? " connected" : " disconnected"));
+                            // Update connection status in StructureInspectionMissionView
+                            if (structureView != null) {
+                                structureView.updateStatus(componentName + (isConnected ? " connected" : " disconnected"));
+                            }
+                        }
+                    });
+                }
+            }
+
+            @Override
+            public void onInitProcess(DJISDKInitEvent djisdkInitEvent, int i) {
+                // Update initialization progress in StructureInspectionMissionView
+                if (structureView != null) {
+                    structureView.updateStatus("SDK Initialization: " + djisdkInitEvent.toString() + " " + i);
+                }
+            }
+
+            @Override
+            public void onDatabaseDownloadProgress(long current, long total) {
+                // Update database download progress in StructureInspectionMissionView
+                if (structureView != null) {
+                    structureView.updateStatus("Database Download Progress: " + current + "/" + total);
+                }
+            }
+        });
     }
 
     @Override
@@ -113,6 +250,9 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
                 return false;
             }
         });
+
+        // Update menu visibility
+        refreshOptionsMenu();
         return true;
     }
 
@@ -129,10 +269,12 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
 
     @Override
     public void onBackPressed() {
-        if (stack.size() > 1) {
-            popView();
+        // If this is the only view (our Structure Inspection view), just exit the app
+        if (stack.size() <= 1) {
+            finish();
         } else {
-            super.onBackPressed();
+            // Otherwise, pop the view as normal
+            popView();
         }
     }
 
@@ -161,14 +303,6 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
         popOutTransition = new LayoutTransition();
         popOutTransition.setAnimator(LayoutTransition.DISAPPEARING, popOutAnimator);
         popOutTransition.setDuration(popOutAnimator.getDuration());
-    }
-
-    private void initParams() {
-        setupInAnimations();
-
-        stack = new Stack<ViewWrapper>();
-        View view = contentFrameLayout.getChildAt(0);
-        stack.push(new ViewWrapper(view, R.string.activity_component_list));
     }
 
     private void pushView(ViewWrapper wrapper) {
@@ -201,21 +335,16 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
     }
 
     private void refreshTitle() {
-        if (stack.size() > 1) {
+        // If this is the only view in stack, it's our Structure Inspection view
+        if (stack.size() == 1) {
+            titleTextView.setText(R.string.component_listview_structure_inspection_mission);
+        } else if (stack.size() > 1) {
             ViewWrapper wrapper = stack.peek();
             titleTextView.setText(wrapper.getTitleId());
-        } else if (stack.size() == 1) {
-            BaseProduct product = DJISampleApplication.getProductInstance();
-            if (product != null && product.getModel() != null) {
-                titleTextView.setText("" + product.getModel().getDisplayName());
-            } else {
-                titleTextView.setText(R.string.sample_app_name);
-            }
         }
     }
 
     private void popView() {
-
         if (stack.size() <= 1) {
             finish();
             return;
@@ -237,19 +366,23 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
     }
 
     private void refreshOptionsMenu() {
-        if (stack.size() == 2 && stack.peek().getView() instanceof DemoListView) {
-            searchViewItem.setVisible(true);
-        } else {
+        // Always hide search since we're not showing the demo list
+        if (searchViewItem != null) {
             searchViewItem.setVisible(false);
             searchViewItem.collapseActionView();
         }
-        if (stack.size() == 3 && stack.peek().getView() instanceof PresentableView) {
-            hintItem.setVisible(true);
+
+        // Show hint if the current view is a PresentableView (Structure Inspection is one)
+        if (stack.size() >= 1 && stack.peek().getView() instanceof PresentableView) {
+            if (hintItem != null) {
+                hintItem.setVisible(true);
+            }
         } else {
-            hintItem.setVisible(false);
+            if (hintItem != null) {
+                hintItem.setVisible(false);
+            }
         }
     }
-
 
     private void showHint() {
         if (stack.size() != 0 && stack.peek().getView() instanceof PresentableView) {
@@ -322,6 +455,10 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
             @Override
             public void run() {
                 refreshTitle();
+                // Update the connection status in the StructureInspectionMissionView
+                if (structureView != null) {
+                    structureView.updateConnectionStatus();
+                }
             }
         });
     }

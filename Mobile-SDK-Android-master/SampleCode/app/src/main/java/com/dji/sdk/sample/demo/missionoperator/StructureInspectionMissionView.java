@@ -58,6 +58,8 @@ import dji.sdk.mission.waypoint.WaypointMissionOperator;
 import dji.sdk.mission.waypoint.WaypointMissionOperatorListener;
 import dji.sdk.products.Aircraft;
 import dji.log.DJILog;
+import dji.sdk.base.BaseProduct;
+import dji.sdk.sdkmanager.DJISDKManager;
 
 public class StructureInspectionMissionView extends MissionBaseView {
 
@@ -86,6 +88,12 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private TextView statusText;
     private TextView noImageText;
     private ImageView imagePreview;
+
+    // Connection status components
+    private TextView connectionStatusText;
+    private TextView modelTextView;
+    private TextView batteryText;
+    private TextView droneLocationText;
 
     // Mission components
     private WaypointMissionOperator waypointMissionOperator;
@@ -163,6 +171,37 @@ public class StructureInspectionMissionView extends MissionBaseView {
         noImageText = findViewById(R.id.text_no_image);
         imagePreview = findViewById(R.id.image_preview);
 
+        // Initialize connection status components
+        connectionStatusText = findViewById(R.id.text_connection_status);
+        modelTextView = findViewById(R.id.text_product_model);
+        batteryText = findViewById(R.id.text_battery_info);
+        droneLocationText = findViewById(R.id.text_drone_location);
+
+        // Initialize connection status if not found in XML layout
+        if (connectionStatusText == null) {
+            connectionStatusText = new TextView(context);
+            connectionStatusText.setId(View.generateViewId());
+            addView(connectionStatusText, 0);
+        }
+
+        if (modelTextView == null) {
+            modelTextView = new TextView(context);
+            modelTextView.setId(View.generateViewId());
+            addView(modelTextView, 1);
+        }
+
+        if (batteryText == null) {
+            batteryText = new TextView(context);
+            batteryText.setId(View.generateViewId());
+            addView(batteryText, 2);
+        }
+
+        if (droneLocationText == null) {
+            droneLocationText = new TextView(context);
+            droneLocationText.setId(View.generateViewId());
+            addView(droneLocationText, 3);
+        }
+
         // Set click listeners
         btnLoadStructures.setOnClickListener(this);
         btnLoadPhotoPositions.setOnClickListener(this);
@@ -184,6 +223,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
         btnStartMission.setEnabled(false);
         btnPause.setEnabled(false);
         btnStopMission.setEnabled(false);
+
+        // Initialize connection status
+        updateConnectionStatus();
     }
 
     @Override
@@ -207,7 +249,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 takeManualPhoto();
             }
         } else if (id == R.id.btn_start_mission) {
-            if (waypointMissionOperator.getCurrentState() == WaypointMissionState.EXECUTION_PAUSED) {
+            if (waypointMissionOperator != null && waypointMissionOperator.getCurrentState() == WaypointMissionState.EXECUTION_PAUSED) {
                 resumeMission();
             } else if (mission != null) {
                 uploadAndStartMission();
@@ -225,11 +267,20 @@ public class StructureInspectionMissionView extends MissionBaseView {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
 
+        // Initialize product connection status
+        updateConnectionStatus();
+
+        // Start initialization if needed
+        initializeProductAndSDK();
+    }
+
+    private void initializeProductAndSDK() {
         // Get product instance and set up flight controller
         Aircraft aircraft = DJISampleApplication.getAircraftInstance();
 
         if (aircraft == null || !aircraft.isConnected()) {
             updateStatus("Aeronave não conectada");
+            updateConnectionStatus();
             return;
         }
 
@@ -265,12 +316,81 @@ public class StructureInspectionMissionView extends MissionBaseView {
                     homeLatitude = flightControllerState.getHomeLocation().getLatitude();
                     homeLongitude = flightControllerState.getHomeLocation().getLongitude();
                     flightState = flightControllerState.getFlightMode();
+
+                    // Update drone location in UI
+                    final double latitude = flightControllerState.getAircraftLocation().getLatitude();
+                    final double longitude = flightControllerState.getAircraftLocation().getLongitude();
+                    final float altitude = flightControllerState.getAircraftLocation().getAltitude();
+
+                    post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (droneLocationText != null) {
+                                droneLocationText.setText("Location: Lat: " + latitude + ", Lon: " + longitude + ", Alt: " + altitude + "m");
+                            }
+                        }
+                    });
                 }
             });
         }
 
         waypointMissionOperator = MissionControl.getInstance().getWaypointMissionOperator();
         setUpListener();
+    }
+
+    // Method to be called when product connects (from MainActivity)
+    public void onProductConnected() {
+        post(new Runnable() {
+            @Override
+            public void run() {
+                initializeProductAndSDK();
+            }
+        });
+    }
+
+    // Update connection status UI
+    public void updateConnectionStatus() {
+        post(new Runnable() {
+            @Override
+            public void run() {
+                BaseProduct product = DJISampleApplication.getProductInstance();
+
+                if (connectionStatusText != null) {
+                    if (product != null && product.isConnected()) {
+                        connectionStatusText.setText("Status: Connected");
+                    } else {
+                        connectionStatusText.setText("Status: Disconnected");
+                    }
+                }
+
+                if (modelTextView != null) {
+                    if (product != null) {
+                        modelTextView.setText("Model: " + (product.getModel() != null ? product.getModel().getDisplayName() : "Unknown"));
+                    } else {
+                        modelTextView.setText("Model: N/A");
+                    }
+                }
+
+                if (batteryText != null) {
+                    if (product instanceof Aircraft) {
+                        Aircraft aircraft = (Aircraft) product;
+                        if (aircraft.getBattery() != null) {
+                            aircraft.getBattery().setStateCallback(batteryState -> {
+                                post(() -> {
+                                    if (batteryText != null && batteryState != null) {
+                                        batteryText.setText("Battery: " + batteryState.getChargeRemainingInPercent() + "%");
+                                    }
+                                });
+                            });
+                        } else {
+                            batteryText.setText("Battery: N/A");
+                        }
+                    } else {
+                        batteryText.setText("Battery: N/A");
+                    }
+                }
+            }
+        });
     }
 
     @Override
@@ -551,8 +671,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
     }
 
     private void uploadAndStartMission() {
-        if (WaypointMissionState.READY_TO_UPLOAD.equals(waypointMissionOperator.getCurrentState()) ||
-                WaypointMissionState.READY_TO_RETRY_UPLOAD.equals(waypointMissionOperator.getCurrentState())) {
+        if (waypointMissionOperator != null &&
+                (WaypointMissionState.READY_TO_UPLOAD.equals(waypointMissionOperator.getCurrentState()) ||
+                        WaypointMissionState.READY_TO_RETRY_UPLOAD.equals(waypointMissionOperator.getCurrentState()))) {
 
             waypointMissionOperator.uploadMission(new CommonCallbacks.CompletionCallback() {
                 @Override
@@ -590,7 +711,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
             });
         } else {
             updateStatus("Missão não está pronta para envio. Estado atual: " +
-                    waypointMissionOperator.getCurrentState().getName());
+                    (waypointMissionOperator != null ? waypointMissionOperator.getCurrentState().getName() : "Operator not initialized"));
         }
     }
 
@@ -1035,7 +1156,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
         }
     }
 
-    private void updateStatus(final String message) {
+    public void updateStatus(final String message) {
         post(new Runnable() {
             @Override
             public void run() {

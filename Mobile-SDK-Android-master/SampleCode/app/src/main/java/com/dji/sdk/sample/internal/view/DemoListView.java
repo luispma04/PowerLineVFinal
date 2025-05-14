@@ -69,6 +69,7 @@ import com.squareup.otto.Subscribe;
 
 /**
  * This view is in charge of showing all the demos in a list.
+ * This class remains unchanged but is not used directly in the modified app since we skip showing the list.
  */
 
 public class DemoListView extends FrameLayout {
