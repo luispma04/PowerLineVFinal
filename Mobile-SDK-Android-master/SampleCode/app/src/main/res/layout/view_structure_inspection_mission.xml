@@ -218,15 +218,36 @@
                 android:text="Ajustar Posição" />
         </LinearLayout>
 
-        <Button
-            android:id="@+id/btn_take_photo"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:enabled="false"
-            android:background="@drawable/button_bg_photo"
-            android:textColor="#FFFFFF"
-            android:text="Tirar Foto Manual" />
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btn_take_photo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:enabled="false"
+                android:background="@drawable/button_bg_photo"
+                android:textColor="#FFFFFF"
+                android:text="Tirar Foto Manual" />
+
+            <!-- Botão para simular foto (visível apenas no modo simulador) -->
+            <Button
+                android:id="@+id/btn_simulate_photo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:enabled="false"
+                android:background="@drawable/button_bg_photo"
+                android:textColor="#FFFFFF"
+                android:text="Simular Foto"
+                android:visibility="gone" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Controles de missão com design futurista -->

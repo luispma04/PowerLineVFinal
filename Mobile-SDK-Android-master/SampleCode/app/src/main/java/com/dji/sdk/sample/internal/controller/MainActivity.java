@@ -61,6 +61,9 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
     private boolean isRegistrationInProgress = false;
     private StructureInspectionMissionView structureView;
 
+    // Flag to easily determine if we're running in simulator mode
+    private boolean isSimulatorMode = true; // Set to true by default for testing
+
     //region Life-cycle
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,7 +81,7 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
         stack = new Stack<ViewWrapper>();
 
         // Create the Structure Inspection Mission View
-        structureView = new StructureInspectionMissionView(this);
+        structureView = new StructureInspectionMissionView(this, isSimulatorMode);
 
         // Remove any existing views in the content frame
         if (contentFrameLayout.getChildCount() > 0) {
@@ -127,12 +130,14 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
                     // Update connection status in StructureInspectionMissionView
                     if (structureView != null) {
                         structureView.updateStatus("SDK registered successfully");
+                        structureView.updateConnectionStatus();
                     }
                 } else {
                     ToastUtils.setResultToToast("SDK registration failed: " + djiError.getDescription());
                     // Update connection status in StructureInspectionMissionView
                     if (structureView != null) {
                         structureView.updateStatus("SDK registration failed: " + djiError.getDescription());
+                        structureView.updateConnectionStatus();
                     }
                 }
             }
@@ -143,6 +148,7 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
                 // Update connection status in StructureInspectionMissionView
                 if (structureView != null) {
                     structureView.updateStatus("Aircraft disconnected");
+                    structureView.updateConnectionStatus();
                 }
             }
 
@@ -153,6 +159,7 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
                 if (structureView != null) {
                     structureView.onProductConnected();
                     structureView.updateStatus("Aircraft connected");
+                    structureView.updateConnectionStatus();
                 }
             }
 
@@ -162,6 +169,7 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
                 // Update connection status in StructureInspectionMissionView
                 if (structureView != null) {
                     structureView.updateStatus("Aircraft changed");
+                    structureView.updateConnectionStatus();
                 }
             }
 
@@ -177,6 +185,7 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
                             // Update connection status in StructureInspectionMissionView
                             if (structureView != null) {
                                 structureView.updateStatus(componentName + (isConnected ? " connected" : " disconnected"));
+                                structureView.updateConnectionStatus();
                             }
                         }
                     });
