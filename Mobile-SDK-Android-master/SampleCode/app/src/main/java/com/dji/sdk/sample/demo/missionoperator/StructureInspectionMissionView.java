@@ -4,6 +4,7 @@ import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Environment;
 import android.os.Handler;
@@ -84,6 +85,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private Button btnStartMission;
     private Button btnPause;
     private Button btnStopMission;
+    private Button btnSimulatePhoto; // New button for simulator mode
     private TextView csvInfoText;
     private TextView statusText;
     private TextView noImageText;
@@ -116,6 +118,14 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private Bitmap lastPhotoTaken = null;
     private SettingsDefinitions.StorageLocation storageLocation = SettingsDefinitions.StorageLocation.INTERNAL_STORAGE;
 
+    // Flag for simulator mode
+    private boolean isSimulatorMode = false;
+    // Store initial home location for return to home functionality
+    private double initialHomeLat;
+    private double initialHomeLon;
+    private float initialHomeAlt;
+    private boolean isMissionPaused = false;
+
     // Data classes for storing mission information
     private class InspectionPoint {
         double latitude;
@@ -146,7 +156,12 @@ public class StructureInspectionMissionView extends MissionBaseView {
     }
 
     public StructureInspectionMissionView(Context context) {
+        this(context, false);
+    }
+
+    public StructureInspectionMissionView(Context context, boolean simulatorMode) {
         super(context);
+        this.isSimulatorMode = simulatorMode;
         init(context);
         mediaStoragePath = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM) + "/structure_inspection");
         if (!mediaStoragePath.exists()) {
@@ -166,6 +181,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
         btnStartMission = findViewById(R.id.btn_start_mission);
         btnPause = findViewById(R.id.btn_pause);
         btnStopMission = findViewById(R.id.btn_stop_mission);
+        btnSimulatePhoto = findViewById(R.id.btn_simulate_photo); // Find the new button
         csvInfoText = findViewById(R.id.text_csv_info);
         statusText = findViewById(R.id.text_status);
         noImageText = findViewById(R.id.text_no_image);
@@ -202,6 +218,12 @@ public class StructureInspectionMissionView extends MissionBaseView {
             addView(droneLocationText, 3);
         }
 
+        // Show or hide the simulate photo button based on simulator mode
+        if (btnSimulatePhoto != null) {
+            btnSimulatePhoto.setVisibility(isSimulatorMode ? View.VISIBLE : View.GONE);
+            btnSimulatePhoto.setOnClickListener(this);
+        }
+
         // Set click listeners
         btnLoadStructures.setOnClickListener(this);
         btnLoadPhotoPositions.setOnClickListener(this);
@@ -223,6 +245,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
         btnStartMission.setEnabled(false);
         btnPause.setEnabled(false);
         btnStopMission.setEnabled(false);
+        if (btnSimulatePhoto != null) {
+            btnSimulatePhoto.setEnabled(false);
+        }
 
         // Initialize connection status
         updateConnectionStatus();
@@ -248,8 +273,14 @@ public class StructureInspectionMissionView extends MissionBaseView {
             if (isInManualMode) {
                 takeManualPhoto();
             }
+        } else if (id == R.id.btn_simulate_photo) {
+            if (isSimulatorMode && isWaitingForReview) {
+                simulatePhoto();
+                updateStatus("Foto simulada gerada");
+                enablePhotoReviewButtons();
+            }
         } else if (id == R.id.btn_start_mission) {
-            if (waypointMissionOperator != null && waypointMissionOperator.getCurrentState() == WaypointMissionState.EXECUTION_PAUSED) {
+            if (isMissionPaused) {
                 resumeMission();
             } else if (mission != null) {
                 uploadAndStartMission();
@@ -259,7 +290,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
         } else if (id == R.id.btn_pause) {
             pauseMission();
         } else if (id == R.id.btn_stop_mission) {
-            stopMission();
+            stopMissionAndReturnHome();
         }
     }
 
@@ -317,6 +348,13 @@ public class StructureInspectionMissionView extends MissionBaseView {
                     homeLongitude = flightControllerState.getHomeLocation().getLongitude();
                     flightState = flightControllerState.getFlightMode();
 
+                    // Store the initial home location when first connecting
+                    if (initialHomeLat == 0 && initialHomeLon == 0) {
+                        initialHomeLat = homeLatitude;
+                        initialHomeLon = homeLongitude;
+                        initialHomeAlt = flightControllerState.getAircraftLocation().getAltitude();
+                    }
+
                     // Update drone location in UI
                     final double latitude = flightControllerState.getAircraftLocation().getLatitude();
                     final double longitude = flightControllerState.getAircraftLocation().getLongitude();
@@ -343,6 +381,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
         post(new Runnable() {
             @Override
             public void run() {
+                updateConnectionStatus();
                 initializeProductAndSDK();
             }
         });
@@ -357,17 +396,19 @@ public class StructureInspectionMissionView extends MissionBaseView {
 
                 if (connectionStatusText != null) {
                     if (product != null && product.isConnected()) {
-                        connectionStatusText.setText("Status: Connected");
+                        connectionStatusText.setText("Conectado");
+                        connectionStatusText.setTextColor(Color.parseColor("#4CAF50")); // Green
                     } else {
-                        connectionStatusText.setText("Status: Disconnected");
+                        connectionStatusText.setText("Desconectado");
+                        connectionStatusText.setTextColor(Color.parseColor("#F44336")); // Red
                     }
                 }
 
                 if (modelTextView != null) {
                     if (product != null) {
-                        modelTextView.setText("Model: " + (product.getModel() != null ? product.getModel().getDisplayName() : "Unknown"));
+                        modelTextView.setText("Modelo: " + (product.getModel() != null ? product.getModel().getDisplayName() : "Desconhecido"));
                     } else {
-                        modelTextView.setText("Model: N/A");
+                        modelTextView.setText("Modelo: N/A");
                     }
                 }
 
@@ -378,15 +419,15 @@ public class StructureInspectionMissionView extends MissionBaseView {
                             aircraft.getBattery().setStateCallback(batteryState -> {
                                 post(() -> {
                                     if (batteryText != null && batteryState != null) {
-                                        batteryText.setText("Battery: " + batteryState.getChargeRemainingInPercent() + "%");
+                                        batteryText.setText("Bateria: " + batteryState.getChargeRemainingInPercent() + "%");
                                     }
                                 });
                             });
                         } else {
-                            batteryText.setText("Battery: N/A");
+                            batteryText.setText("Bateria: N/A");
                         }
                     } else {
-                        batteryText.setText("Battery: N/A");
+                        batteryText.setText("Bateria: N/A");
                     }
                 }
             }
@@ -586,6 +627,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
         // Reset current indices
         currentInspectionIndex = 0;
         currentPhotoIndex = 0;
+        isMissionPaused = false;
 
         // Create mission for the first inspection point
         createWaypointMissionForInspectionPoint(currentInspectionIndex);
@@ -627,6 +669,11 @@ public class StructureInspectionMissionView extends MissionBaseView {
 
         // Build and load the mission
         mission = builder.build();
+
+        if (waypointMissionOperator == null) {
+            updateStatus("WaypointMissionOperator não está inicializado.");
+            return;
+        }
 
         DJIError error = waypointMissionOperator.loadMission(mission);
         final int missionIndex = inspectionIndex;
@@ -695,6 +742,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                                     btnPause.setEnabled(true);
                                                     btnStopMission.setEnabled(true);
                                                     btnStartMission.setEnabled(false);
+                                                    isMissionPaused = false;
                                                 } else {
                                                     updateStatus("Falha ao iniciar missão: " + djiError.getDescription());
                                                 }
@@ -727,6 +775,8 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                 updateStatus("Missão pausada");
                                 btnPause.setEnabled(false);
                                 btnStartMission.setEnabled(true); // Use same button to resume
+                                btnStartMission.setText("Continuar Missão");
+                                isMissionPaused = true;
                             } else {
                                 updateStatus("Falha ao pausar missão: " + djiError.getDescription());
                             }
@@ -749,6 +799,8 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                 updateStatus("Missão retomada");
                                 btnPause.setEnabled(true);
                                 btnStartMission.setEnabled(false);
+                                btnStartMission.setText("Iniciar Missão");
+                                isMissionPaused = false;
                             } else {
                                 updateStatus("Falha ao retomar missão: " + djiError.getDescription());
                             }
@@ -759,8 +811,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
         }
     }
 
-    private void stopMission() {
+    private void stopMissionAndReturnHome() {
         if (waypointMissionOperator != null) {
+            // First stop the current mission
             waypointMissionOperator.stopMission(new CommonCallbacks.CompletionCallback() {
                 @Override
                 public void onResult(final DJIError djiError) {
@@ -768,16 +821,25 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         @Override
                         public void run() {
                             if (djiError == null) {
-                                updateStatus("Missão encerrada");
+                                updateStatus("Missão encerrada, retornando para posição inicial...");
+
+                                // Create a return to home mission
+                                createReturnToHomeMission();
+
+                                // Reset UI
                                 btnPause.setEnabled(false);
                                 btnStopMission.setEnabled(false);
                                 btnStartMission.setEnabled(true);
+                                btnStartMission.setText("Iniciar Missão");
+                                isMissionPaused = false;
 
-                                // Reset UI
                                 noImageText.setVisibility(View.VISIBLE);
                                 imagePreview.setImageBitmap(null);
                                 btnConfirmPhoto.setEnabled(false);
                                 btnAdjustPosition.setEnabled(false);
+                                if (btnSimulatePhoto != null) {
+                                    btnSimulatePhoto.setEnabled(false);
+                                }
                             } else {
                                 updateStatus("Falha ao encerrar missão: " + djiError.getDescription());
                             }
@@ -785,6 +847,99 @@ public class StructureInspectionMissionView extends MissionBaseView {
                     });
                 }
             });
+        }
+    }
+
+    private void createReturnToHomeMission() {
+        // Create a simple mission to return to home
+        WaypointMission.Builder builder = new WaypointMission.Builder();
+
+        // Set mission parameters for return to home
+        builder.autoFlightSpeed(DEFAULT_SPEED);
+        builder.maxFlightSpeed(DEFAULT_SPEED * 2);
+        builder.setExitMissionOnRCSignalLostEnabled(false);
+        builder.finishedAction(WaypointMissionFinishedAction.GO_HOME);
+        builder.flightPathMode(WaypointMissionFlightPathMode.NORMAL);
+        builder.headingMode(WaypointMissionHeadingMode.AUTO);
+
+        // Add home location as the destination waypoint
+        // Use a safe altitude first to avoid obstacles
+        float returnAltitude = Math.max(initialHomeAlt + 20, 30); // At least 30m or 20m above takeoff
+
+        // First waypoint: Rise to safe altitude
+        Waypoint currentLocationWaypoint = new Waypoint(
+                homeLatitude, // Current drone latitude
+                homeLongitude, // Current drone longitude
+                returnAltitude
+        );
+        builder.addWaypoint(currentLocationWaypoint);
+
+        // Second waypoint: Go to home position at safe altitude
+        Waypoint homeWaypoint = new Waypoint(
+                initialHomeLat,
+                initialHomeLon,
+                returnAltitude
+        );
+        builder.addWaypoint(homeWaypoint);
+
+        // Build and load the return mission
+        WaypointMission returnMission = builder.build();
+
+        if (waypointMissionOperator != null) {
+            DJIError error = waypointMissionOperator.loadMission(returnMission);
+
+            if (error == null) {
+                // Start the return mission
+                waypointMissionOperator.uploadMission(new CommonCallbacks.CompletionCallback() {
+                    @Override
+                    public void onResult(DJIError djiError) {
+                        if (djiError == null) {
+                            waypointMissionOperator.startMission(new CommonCallbacks.CompletionCallback() {
+                                @Override
+                                public void onResult(DJIError djiError) {
+                                    if (djiError == null) {
+                                        updateStatus("Retornando para casa...");
+                                    } else {
+                                        updateStatus("Falha ao iniciar retorno: " + djiError.getDescription());
+                                    }
+                                }
+                            });
+                        } else {
+                            updateStatus("Falha ao enviar missão de retorno: " + djiError.getDescription());
+
+                            // Alternative: use go home command if mission fails
+                            if (flightController != null) {
+                                flightController.startGoHome(new CommonCallbacks.CompletionCallback() {
+                                    @Override
+                                    public void onResult(DJIError djiError) {
+                                        if (djiError == null) {
+                                            updateStatus("Go Home iniciado.");
+                                        } else {
+                                            updateStatus("Falha ao iniciar Go Home: " + djiError.getDescription());
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+            } else {
+                updateStatus("Falha ao criar missão de retorno: " + error.getDescription());
+
+                // Alternative: use go home command if mission fails
+                if (flightController != null) {
+                    flightController.startGoHome(new CommonCallbacks.CompletionCallback() {
+                        @Override
+                        public void onResult(DJIError djiError) {
+                            if (djiError == null) {
+                                updateStatus("Go Home iniciado.");
+                            } else {
+                                updateStatus("Falha ao iniciar Go Home: " + djiError.getDescription());
+                            }
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -828,8 +983,18 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         if (error == null) {
                             updateStatus("Foto tirada. Aguardando confirmação...");
 
-                            // Fetch the latest photo for review
-                            fetchLatestPhotoForReview();
+                            // In simulator mode, automatically simulate photo
+                            if (isSimulatorMode) {
+                                simulatePhoto();
+                                updateStatus("Foto simulada gerada automaticamente (modo simulador)");
+                                enablePhotoReviewButtons();
+                                if (btnSimulatePhoto != null) {
+                                    btnSimulatePhoto.setEnabled(true);
+                                }
+                            } else {
+                                // Fetch the latest photo for review in real drone
+                                fetchLatestPhotoForReview();
+                            }
                         } else {
                             updateStatus("Falha na execução da missão: " + error.getDescription());
                         }
@@ -962,10 +1127,22 @@ public class StructureInspectionMissionView extends MissionBaseView {
             public void run() {
                 // Create a simulated image
                 Bitmap bitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
-                bitmap.eraseColor(0xFF3498DB); // Blue color
+
+                // Create a more visually interesting simulated photo based on structure and photo indices
+                int r = (currentInspectionIndex * 50) % 255;
+                int g = (currentPhotoIndex * 40) % 255;
+                int b = (currentInspectionIndex * currentPhotoIndex * 30) % 255;
+
+                bitmap.eraseColor(Color.rgb(r, g, b));
+
                 displayPhoto(bitmap);
                 lastPhotoTaken = bitmap;
-                enablePhotoReviewButtons();
+                isWaitingForReview = true;
+
+                // If we're in simulator mode, enable the simulated photo button
+                if (isSimulatorMode && btnSimulatePhoto != null) {
+                    btnSimulatePhoto.setEnabled(true);
+                }
             }
         });
     }
@@ -1003,6 +1180,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 isWaitingForReview = false;
                 btnConfirmPhoto.setEnabled(false);
                 btnAdjustPosition.setEnabled(false);
+                if (btnSimulatePhoto != null) {
+                    btnSimulatePhoto.setEnabled(false);
+                }
                 updateStatus("Avançando para próxima foto...");
             }
         });
@@ -1028,6 +1208,8 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         btnStartMission.setEnabled(false);
                         btnStopMission.setEnabled(false);
                         btnPause.setEnabled(false);
+                        btnStartMission.setText("Iniciar Missão");
+                        isMissionPaused = false;
                     }
                 });
             }
@@ -1092,6 +1274,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 btnConfirmPhoto.setEnabled(false);
                 btnAdjustPosition.setEnabled(false);
                 btnTakePhoto.setEnabled(true);
+                if (btnSimulatePhoto != null) {
+                    btnSimulatePhoto.setEnabled(false);
+                }
 
                 updateStatus("Modo de ajuste manual ativado. Use o controle remoto para posicionar o drone, depois tire uma foto.");
             }
@@ -1142,7 +1327,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 }
             });
         } else {
-            // Simulation for when camera is not available
+            // Simulation for when camera is not available or in simulator mode
             simulatePhoto();
             updateStatus("Foto simulada tirada manualmente");
             isInManualMode = false;
@@ -1151,6 +1336,10 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 public void run() {
                     btnTakePhoto.setEnabled(false);
                     btnConfirmPhoto.setEnabled(true);
+                    btnAdjustPosition.setEnabled(true);
+                    if (isSimulatorMode && btnSimulatePhoto != null) {
+                        btnSimulatePhoto.setEnabled(true);
+                    }
                 }
             });
         }
@@ -1160,7 +1349,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
         post(new Runnable() {
             @Override
             public void run() {
-                statusText.setText("Status: " + message);
+                if (statusText != null) {
+                    statusText.setText("Status: " + message);
+                }
                 Log.d(TAG, message);
             }
         });
