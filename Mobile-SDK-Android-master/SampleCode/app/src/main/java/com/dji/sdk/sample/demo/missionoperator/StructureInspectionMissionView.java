@@ -294,7 +294,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
         } else if (id == R.id.btn_pause) {
             pauseMission();
         } else if (id == R.id.btn_stop_mission) {
-            stopMissionAndReturnHome();
+            emergencyAbortMission();
         }
     }
 
@@ -824,44 +824,57 @@ public class StructureInspectionMissionView extends MissionBaseView {
         }
     }
 
-    private void stopMissionAndReturnHome() {
+    private void emergencyAbortMission() {
+        updateStatus("Encerrar missão e regressar ao ponto de partida...");
         if (waypointMissionOperator != null) {
-            // First stop the current mission
             waypointMissionOperator.stopMission(new CommonCallbacks.CompletionCallback() {
                 @Override
-                public void onResult(final DJIError djiError) {
-                    post(new Runnable() {
+                public void onResult(DJIError djiError) {
+                    if (djiError == null) {
+                        updateStatus("Missão parada com sucesso. Subindo à altitude segura...");
+                        goToSafeAltitudeAndReturnHome();
+                    } else {
+                        updateStatus("Erro ao parar missão: " + djiError.getDescription());
+                    }
+                }
+            });
+        } else {
+            goToSafeAltitudeAndReturnHome();
+        }
+
+        // Desativa os botões para evitar múltiplos cliques
+        btnPause.setEnabled(false);
+        btnStopMission.setEnabled(false);
+        btnStartMission.setEnabled(true);
+    }
+
+    private void goToSafeAltitudeAndReturnHome() {
+        if (flightController == null) {
+            updateStatus("Controlador de voo indisponível");
+            return;
+        }
+
+        final int ALTURA_SEGURA = 50; // metros
+        flightController.setGoHomeHeightInMeters(ALTURA_SEGURA, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    updateStatus("Altitude de retorno definida para " + ALTURA_SEGURA + "m. Iniciando retorno...");
+                    flightController.startGoHome(new CommonCallbacks.CompletionCallback() {
                         @Override
-                        public void run() {
+                        public void onResult(DJIError djiError) {
                             if (djiError == null) {
-                                updateStatus("Missão encerrada, retornando para posição inicial...");
-
-                                // Create a return to home mission
-                                createReturnToHomeMission();
-
-                                // Reset UI
-                                btnPause.setEnabled(false);
-                                btnStopMission.setEnabled(false);
-                                btnStartMission.setEnabled(true);
-                                btnStartMission.setText("Iniciar Missão");
-                                isMissionPaused = false;
-                                missionPausedForPhotoReview = false;
-
-                                noImageText.setVisibility(View.VISIBLE);
-                                imagePreview.setImageBitmap(null);
-                                btnConfirmPhoto.setEnabled(false);
-                                btnAdjustPosition.setEnabled(false);
-                                if (btnSimulatePhoto != null) {
-                                    btnSimulatePhoto.setEnabled(false);
-                                }
+                                updateStatus("Drone a regressar ao ponto de partida.");
                             } else {
-                                updateStatus("Falha ao encerrar missão: " + djiError.getDescription());
+                                updateStatus("Erro ao iniciar retorno: " + djiError.getDescription());
                             }
                         }
                     });
+                } else {
+                    updateStatus("Erro ao definir altitude de retorno: " + djiError.getDescription());
                 }
-            });
-        }
+            }
+        });
     }
 
     private void createReturnToHomeMission() {
