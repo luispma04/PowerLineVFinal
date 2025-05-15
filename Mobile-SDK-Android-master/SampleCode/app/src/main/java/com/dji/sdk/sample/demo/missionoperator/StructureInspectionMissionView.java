@@ -126,6 +126,10 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private float initialHomeAlt;
     private boolean isMissionPaused = false;
 
+    // Track created waypoints
+    private int totalWaypointCount = 0;
+    private boolean missionPausedForPhotoReview = false;
+
     // Data classes for storing mission information
     private class InspectionPoint {
         double latitude;
@@ -280,7 +284,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 enablePhotoReviewButtons();
             }
         } else if (id == R.id.btn_start_mission) {
-            if (isMissionPaused) {
+            if (isMissionPaused || missionPausedForPhotoReview) {
                 resumeMission();
             } else if (mission != null) {
                 uploadAndStartMission();
@@ -628,19 +632,14 @@ public class StructureInspectionMissionView extends MissionBaseView {
         currentInspectionIndex = 0;
         currentPhotoIndex = 0;
         isMissionPaused = false;
+        missionPausedForPhotoReview = false;
 
-        // Create mission for the first inspection point
-        createWaypointMissionForInspectionPoint(currentInspectionIndex);
+        // Create complete mission with all inspection points and their photos
+        createCompleteMission();
     }
 
-    private void createWaypointMissionForInspectionPoint(int inspectionIndex) {
-        if (inspectionIndex >= inspectionPoints.size()) {
-            updateStatus("Missão de inspeção concluída!");
-            return;
-        }
-
-        InspectionPoint point = inspectionPoints.get(inspectionIndex);
-
+    // Create a complete mission with all inspection points and photo positions
+    private void createCompleteMission() {
         // Create a mission builder
         WaypointMission.Builder builder = new WaypointMission.Builder();
 
@@ -648,24 +647,52 @@ public class StructureInspectionMissionView extends MissionBaseView {
         builder.autoFlightSpeed(DEFAULT_SPEED);
         builder.maxFlightSpeed(DEFAULT_SPEED * 2);
         builder.setExitMissionOnRCSignalLostEnabled(false);
-        builder.finishedAction(WaypointMissionFinishedAction.NO_ACTION); // Don't go home between inspection points
+        builder.finishedAction(WaypointMissionFinishedAction.NO_ACTION);
         builder.flightPathMode(WaypointMissionFlightPathMode.NORMAL);
         builder.headingMode(WaypointMissionHeadingMode.AUTO);
         builder.setGimbalPitchRotationEnabled(true);
 
-        // Calculate safe altitude for the structure
-        float safeAltitude = point.groundAltitude + point.structureHeight + SAFE_DISTANCE;
+        totalWaypointCount = 0;
 
-        // First waypoint: Go to the inspection point at safe altitude
-        Waypoint initialWaypoint = new Waypoint(
-                point.latitude,
-                point.longitude,
-                safeAltitude
-        );
-        builder.addWaypoint(initialWaypoint);
+        // For each inspection point, add all its photo positions
+        for (int i = 0; i < inspectionPoints.size(); i++) {
+            InspectionPoint point = inspectionPoints.get(i);
 
-        // Create the first photo waypoint
-        createWaypointForPhotoPoint(builder, point, 0);
+            // Calculate safe altitude for the structure
+            float safeAltitude = point.groundAltitude + point.structureHeight + SAFE_DISTANCE;
+
+            // First waypoint: Go to the inspection point at safe altitude
+            Waypoint initialWaypoint = new Waypoint(
+                    point.latitude,
+                    point.longitude,
+                    safeAltitude
+            );
+            builder.addWaypoint(initialWaypoint);
+            totalWaypointCount++;
+
+            // Add all photo waypoints for this inspection point
+            for (int j = 0; j < photoPoints.size(); j++) {
+                RelativePhotoPoint photoPoint = photoPoints.get(j);
+
+                // Calculate absolute coordinates from relative offsets
+                double photoLatitude = point.latitude + (photoPoint.offsetY * ONE_METER_OFFSET);
+                double photoLongitude = point.longitude + (photoPoint.offsetX * ONE_METER_OFFSET);
+                float photoAltitude = point.groundAltitude + point.structureHeight + photoPoint.offsetZ;
+
+                // Create the waypoint
+                Waypoint photoWaypoint = new Waypoint(photoLatitude, photoLongitude, photoAltitude);
+
+                // Add gimbal pitch action
+                photoWaypoint.addAction(new WaypointAction(WaypointActionType.GIMBAL_PITCH, Math.round(photoPoint.gimbalPitch)));
+
+                // Add photo action
+                photoWaypoint.addAction(new WaypointAction(WaypointActionType.START_TAKE_PHOTO, 0));
+
+                // Add waypoint to the mission builder
+                builder.addWaypoint(photoWaypoint);
+                totalWaypointCount++;
+            }
+        }
 
         // Build and load the mission
         mission = builder.build();
@@ -676,45 +703,19 @@ public class StructureInspectionMissionView extends MissionBaseView {
         }
 
         DJIError error = waypointMissionOperator.loadMission(mission);
-        final int missionIndex = inspectionIndex;
         final String errorMsg = (error != null) ? error.getDescription() : null;
 
         post(new Runnable() {
             @Override
             public void run() {
                 if (errorMsg == null) {
-                    updateStatus("Missão carregada para o ponto de inspeção " + (missionIndex + 1));
+                    updateStatus("Missão completa carregada com " + totalWaypointCount + " waypoints");
                     btnStartMission.setEnabled(true);
                 } else {
                     updateStatus("Erro ao carregar missão: " + errorMsg);
                 }
             }
         });
-    }
-
-    private void createWaypointForPhotoPoint(WaypointMission.Builder builder, InspectionPoint inspectionPoint, int photoIndex) {
-        if (photoIndex >= photoPoints.size()) {
-            return;
-        }
-
-        RelativePhotoPoint photoPoint = photoPoints.get(photoIndex);
-
-        // Calculate absolute coordinates from relative offsets
-        double photoLatitude = inspectionPoint.latitude + (photoPoint.offsetY * ONE_METER_OFFSET);
-        double photoLongitude = inspectionPoint.longitude + (photoPoint.offsetX * ONE_METER_OFFSET);
-        float photoAltitude = inspectionPoint.groundAltitude + inspectionPoint.structureHeight + photoPoint.offsetZ;
-
-        // Create the waypoint
-        Waypoint photoWaypoint = new Waypoint(photoLatitude, photoLongitude, photoAltitude);
-
-        // Add gimbal pitch action
-        photoWaypoint.addAction(new WaypointAction(WaypointActionType.GIMBAL_PITCH, Math.round(photoPoint.gimbalPitch)));
-
-        // Add photo action
-        photoWaypoint.addAction(new WaypointAction(WaypointActionType.START_TAKE_PHOTO, 0));
-
-        // Add waypoint to the mission builder
-        builder.addWaypoint(photoWaypoint);
     }
 
     private void uploadAndStartMission() {
@@ -743,6 +744,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                                     btnStopMission.setEnabled(true);
                                                     btnStartMission.setEnabled(false);
                                                     isMissionPaused = false;
+                                                    missionPausedForPhotoReview = false;
                                                 } else {
                                                     updateStatus("Falha ao iniciar missão: " + djiError.getDescription());
                                                 }
@@ -801,6 +803,17 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                 btnStartMission.setEnabled(false);
                                 btnStartMission.setText("Iniciar Missão");
                                 isMissionPaused = false;
+
+                                // Reset photo review flags when resuming
+                                if (missionPausedForPhotoReview) {
+                                    missionPausedForPhotoReview = false;
+                                    isWaitingForReview = false;
+                                    btnConfirmPhoto.setEnabled(false);
+                                    btnAdjustPosition.setEnabled(false);
+                                    if (btnSimulatePhoto != null) {
+                                        btnSimulatePhoto.setEnabled(false);
+                                    }
+                                }
                             } else {
                                 updateStatus("Falha ao retomar missão: " + djiError.getDescription());
                             }
@@ -832,6 +845,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                 btnStartMission.setEnabled(true);
                                 btnStartMission.setText("Iniciar Missão");
                                 isMissionPaused = false;
+                                missionPausedForPhotoReview = false;
 
                                 noImageText.setVisibility(View.VISIBLE);
                                 imagePreview.setImageBitmap(null);
@@ -963,10 +977,36 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 if (event.getProgress() != null) {
                     final int currentWaypointIndex = event.getProgress().targetWaypointIndex;
 
+                    // Determine if this is a photo waypoint (every even index after the first)
+                    // These calculations depend on your waypoint structure (one positioning waypoint followed by photo waypoints)
+                    boolean isPhotoWaypoint = currentWaypointIndex % 2 == 1; // If odd index, it's a photo waypoint in our structure
+
+                    // Calculate the current inspection point and photo indices
+                    if (photoPoints.size() > 0) {
+                        int photosPerInspection = photoPoints.size();
+                        currentInspectionIndex = (currentWaypointIndex - 1) / (photosPerInspection + 1);
+                        if (isPhotoWaypoint) {
+                            currentPhotoIndex = (currentWaypointIndex - 1) % (photosPerInspection + 1);
+                            if (currentPhotoIndex >= photosPerInspection) {
+                                currentPhotoIndex = 0;
+                            }
+                        }
+                    }
+
                     // Update status with current progress
-                    updateStatus("Waypoint: " + currentWaypointIndex +
+                    updateStatus("Waypoint: " + currentWaypointIndex + "/" + totalWaypointCount +
                             " | Estrutura: " + (currentInspectionIndex+1) + "/" + inspectionPoints.size() +
                             " | Foto: " + (currentPhotoIndex+1) + "/" + photoPoints.size());
+
+                    // If this is a photo waypoint and the photo has been taken
+                    if (isPhotoWaypoint &&
+                            event.getProgress().isWaypointReached &&
+                            !missionPausedForPhotoReview &&
+                            event.getCurrentState() == WaypointMissionState.EXECUTING) {
+
+                        // Automatically pause for photo review
+                        pauseMissionForPhotoReview();
+                    }
                 }
             }
 
@@ -981,20 +1021,26 @@ public class StructureInspectionMissionView extends MissionBaseView {
                     @Override
                     public void run() {
                         if (error == null) {
-                            updateStatus("Foto tirada. Aguardando confirmação...");
+                            updateStatus("Missão concluída com sucesso");
 
-                            // In simulator mode, automatically simulate photo
-                            if (isSimulatorMode) {
-                                simulatePhoto();
-                                updateStatus("Foto simulada gerada automaticamente (modo simulador)");
-                                enablePhotoReviewButtons();
-                                if (btnSimulatePhoto != null) {
-                                    btnSimulatePhoto.setEnabled(true);
-                                }
-                            } else {
-                                // Fetch the latest photo for review in real drone
-                                fetchLatestPhotoForReview();
+                            // Reset UI
+                            btnPause.setEnabled(false);
+                            btnStopMission.setEnabled(false);
+                            btnStartMission.setEnabled(true);
+                            btnStartMission.setText("Iniciar Missão");
+                            isMissionPaused = false;
+                            missionPausedForPhotoReview = false;
+
+                            // Reset photo review states
+                            isWaitingForReview = false;
+                            isInManualMode = false;
+                            btnConfirmPhoto.setEnabled(false);
+                            btnAdjustPosition.setEnabled(false);
+                            btnTakePhoto.setEnabled(false);
+                            if (btnSimulatePhoto != null) {
+                                btnSimulatePhoto.setEnabled(false);
                             }
+
                         } else {
                             updateStatus("Falha na execução da missão: " + error.getDescription());
                         }
@@ -1005,6 +1051,42 @@ public class StructureInspectionMissionView extends MissionBaseView {
 
         if (waypointMissionOperator != null) {
             waypointMissionOperator.addListener(listener);
+        }
+    }
+
+    private void pauseMissionForPhotoReview() {
+        if (waypointMissionOperator != null) {
+            waypointMissionOperator.pauseMission(new CommonCallbacks.CompletionCallback() {
+                @Override
+                public void onResult(DJIError djiError) {
+                    if (djiError == null) {
+                        missionPausedForPhotoReview = true;
+                        isMissionPaused = true;
+                        updateStatus("Missão pausada para revisão de foto");
+
+                        // Update UI
+                        post(new Runnable() {
+                            @Override
+                            public void run() {
+                                btnPause.setEnabled(false);
+                                btnStartMission.setEnabled(false); // Will be enabled after photo review
+                                btnStartMission.setText("Continuar Missão");
+                            }
+                        });
+
+                        // Fetch the photo for review
+                        if (isSimulatorMode) {
+                            simulatePhoto();
+                            updateStatus("Foto simulada gerada automaticamente (modo simulador)");
+                            enablePhotoReviewButtons();
+                        } else {
+                            fetchLatestPhotoForReview();
+                        }
+                    } else {
+                        updateStatus("Falha ao pausar para revisão: " + djiError.getDescription());
+                    }
+                }
+            });
         }
     }
 
@@ -1169,96 +1251,29 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 btnConfirmPhoto.setEnabled(true);
                 btnAdjustPosition.setEnabled(true);
                 btnTakePhoto.setEnabled(false);
+                btnStartMission.setEnabled(false);
             }
         });
     }
 
     private void proceedToNextPhoto() {
+        // Immediately resume the mission when photo is confirmed
         post(new Runnable() {
             @Override
             public void run() {
-                isWaitingForReview = false;
                 btnConfirmPhoto.setEnabled(false);
                 btnAdjustPosition.setEnabled(false);
+                btnStartMission.setEnabled(false);
+                isWaitingForReview = false;
+
                 if (btnSimulatePhoto != null) {
                     btnSimulatePhoto.setEnabled(false);
                 }
-                updateStatus("Avançando para próxima foto...");
-            }
-        });
 
-        // Move to the next photo position
-        currentPhotoIndex++;
+                updateStatus("Foto confirmada. Retomando missão...");
 
-        if (currentPhotoIndex >= photoPoints.size()) {
-            // All photos for this inspection point are done
-            currentPhotoIndex = 0;
-            currentInspectionIndex++;
-
-            // Move to the next inspection point
-            if (currentInspectionIndex < inspectionPoints.size()) {
-                // Create a new mission for the next inspection point
-                createWaypointMissionForInspectionPoint(currentInspectionIndex);
-            } else {
-                // All inspection points are complete
-                updateStatus("Missão de inspeção concluída!");
-                post(new Runnable() {
-                    @Override
-                    public void run() {
-                        btnStartMission.setEnabled(false);
-                        btnStopMission.setEnabled(false);
-                        btnPause.setEnabled(false);
-                        btnStartMission.setText("Iniciar Missão");
-                        isMissionPaused = false;
-                    }
-                });
-            }
-        } else {
-            // Create mission for the next photo at the same inspection point
-            createMissionForNextPhoto();
-        }
-    }
-
-    private void createMissionForNextPhoto() {
-        if (currentInspectionIndex >= inspectionPoints.size() || currentPhotoIndex >= photoPoints.size()) {
-            return;
-        }
-
-        InspectionPoint inspectionPoint = inspectionPoints.get(currentInspectionIndex);
-
-        // Create a mission builder
-        WaypointMission.Builder builder = new WaypointMission.Builder();
-
-        // Set mission parameters
-        builder.autoFlightSpeed(DEFAULT_SPEED);
-        builder.maxFlightSpeed(DEFAULT_SPEED * 2);
-        builder.setExitMissionOnRCSignalLostEnabled(false);
-        builder.finishedAction(WaypointMissionFinishedAction.NO_ACTION);
-        builder.flightPathMode(WaypointMissionFlightPathMode.NORMAL);
-        builder.headingMode(WaypointMissionHeadingMode.AUTO);
-        builder.setGimbalPitchRotationEnabled(true);
-
-        // Create the waypoint for the next photo
-        createWaypointForPhotoPoint(builder, inspectionPoint, currentPhotoIndex);
-
-        // Build and load the mission
-        mission = builder.build();
-
-        DJIError error = waypointMissionOperator.loadMission(mission);
-        final int photoIndex = currentPhotoIndex;
-        final int inspectionIndex = currentInspectionIndex;
-        final String errorMsg = (error != null) ? error.getDescription() : null;
-
-        post(new Runnable() {
-            @Override
-            public void run() {
-                if (errorMsg == null) {
-                    updateStatus("Missão carregada para foto " + (photoIndex + 1) +
-                            " no ponto de inspeção " + (inspectionIndex + 1));
-                    uploadAndStartMission();
-                } else {
-                    updateStatus("Falha ao carregar missão: " + errorMsg);
-                }
+                // Resume the mission immediately
+                resumeMission();
             }
         });
     }
@@ -1274,6 +1289,8 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 btnConfirmPhoto.setEnabled(false);
                 btnAdjustPosition.setEnabled(false);
                 btnTakePhoto.setEnabled(true);
+                btnStartMission.setEnabled(false);
+
                 if (btnSimulatePhoto != null) {
                     btnSimulatePhoto.setEnabled(false);
                 }
@@ -1301,7 +1318,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                             public void run() {
                                                 if (djiError == null) {
                                                     updateStatus("Foto tirada manualmente com sucesso");
-                                                    // Exit manual mode and proceed to next photo
+                                                    // Exit manual mode
                                                     isInManualMode = false;
                                                     btnTakePhoto.setEnabled(false);
 
@@ -1309,7 +1326,18 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                                     new Handler().postDelayed(new Runnable() {
                                                         @Override
                                                         public void run() {
+                                                            // Show the photo for review
                                                             fetchLatestPhotoForReview();
+
+                                                            // Only enable confirm button (will auto-resume on confirm)
+                                                            post(new Runnable() {
+                                                                @Override
+                                                                public void run() {
+                                                                    btnConfirmPhoto.setEnabled(true);
+                                                                    btnStartMission.setEnabled(false);
+                                                                    updateStatus("Foto manual tirada. Confirme para continuar a missão.");
+                                                                }
+                                                            });
                                                         }
                                                     }, 2000); // 2 seconds
                                                 } else {
@@ -1336,10 +1364,14 @@ public class StructureInspectionMissionView extends MissionBaseView {
                 public void run() {
                     btnTakePhoto.setEnabled(false);
                     btnConfirmPhoto.setEnabled(true);
-                    btnAdjustPosition.setEnabled(true);
+                    btnAdjustPosition.setEnabled(false); // Disable adjust since we already adjusted
+                    btnStartMission.setEnabled(false); // Don't need this since confirm will resume
+
                     if (isSimulatorMode && btnSimulatePhoto != null) {
-                        btnSimulatePhoto.setEnabled(true);
+                        btnSimulatePhoto.setEnabled(false);
                     }
+
+                    updateStatus("Foto manual simulada. Confirme para continuar a missão.");
                 }
             });
         }
