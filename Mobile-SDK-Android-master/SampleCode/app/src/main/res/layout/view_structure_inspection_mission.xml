@@ -9,14 +9,44 @@
     android:background="#F5F7FA">
 
     <!-- Título da aplicação com estilo mais moderno -->
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp"
-        android:text="Inspeção Automatizada de Estruturas"
-        android:textSize="22sp"
-        android:textColor="#1E3A8A"
-        android:textStyle="bold" />
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Inspeção Automatizada de Estruturas"
+            android:textSize="20sp"
+            android:textColor="#1E3A8A"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_review_photo"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/button_bg_photo"
+                android:textColor="#FFFFFF"
+                android:text="Foto Debug" />
+
+            <Button
+                android:id="@+id/btn_toggle_gallery"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:background="@drawable/button_bg"
+                android:textColor="#FFFFFF"
+                android:text="Galeria" />
+        </LinearLayout>
+    </LinearLayout>
 
     <!-- Seção de status de conexão - Novo elemento -->
     <LinearLayout
@@ -88,227 +118,246 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Seção de Importação de Dados -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp"
-        android:background="@drawable/rounded_card_bg"
-        android:orientation="vertical"
-        android:padding="12dp"
-        android:elevation="2dp">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:text="Arquivos de Missão"
-            android:textColor="#1E3A8A"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btn_load_structures"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:background="@drawable/button_bg"
-                android:textColor="#FFFFFF"
-                android:text="Importar Estruturas" />
-
-            <Button
-                android:id="@+id/btn_load_photo_positions"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_weight="1"
-                android:background="@drawable/button_bg"
-                android:textColor="#FFFFFF"
-                android:text="Importar Posições" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/text_csv_info"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Nenhum arquivo carregado"
-            android:textColor="#4B5563" />
-    </LinearLayout>
-
-    <!-- Visualização da Foto com design melhorado -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="8dp"
-        android:text="Visualização da Foto"
-        android:textColor="#1E3A8A"
-        android:textStyle="bold" />
-
-    <FrameLayout
+    <!-- ViewFlipper para alternar entre a tela principal e galeria de fotos -->
+    <ViewFlipper
+        android:id="@+id/view_flipper"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:background="@drawable/photo_preview_bg"
-        android:padding="2dp"
-        android:elevation="3dp">
+        android:layout_weight="1">
 
-        <ImageView
-            android:id="@+id/image_preview"
+        <!-- Tela principal da missão -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:scaleType="fitCenter" />
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/text_no_image"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:text="Aguardando foto do drone..."
-            android:textSize="16sp"
-            android:textColor="#4B5563" />
-    </FrameLayout>
-
-    <!-- Controles de revisão de fotografia com design aprimorado -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:layout_marginBottom="12dp"
-        android:orientation="vertical">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:text="Controle de Fotos"
-            android:textColor="#1E3A8A"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btn_confirm_photo"
-                android:layout_width="0dp"
+            <!-- Seção de Importação de Dados -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:enabled="false"
-                android:background="@drawable/button_bg_confirm"
-                android:textColor="#FFFFFF"
-                android:text="Confirmar Foto (OK)" />
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/rounded_card_bg"
+                android:orientation="vertical"
+                android:padding="12dp"
+                android:elevation="2dp">
 
-            <Button
-                android:id="@+id/btn_adjust_position"
-                android:layout_width="0dp"
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:text="Arquivos de Missão"
+                    android:textColor="#1E3A8A"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btn_load_structures"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/button_bg"
+                        android:textColor="#FFFFFF"
+                        android:text="Importar Estruturas" />
+
+                    <Button
+                        android:id="@+id/btn_load_photo_positions"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/button_bg"
+                        android:textColor="#FFFFFF"
+                        android:text="Importar Posições" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/text_csv_info"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Nenhum arquivo carregado"
+                    android:textColor="#4B5563" />
+            </LinearLayout>
+
+            <!-- Controles de missão com design futurista -->
+            <TextView
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_weight="1"
-                android:enabled="false"
-                android:background="@drawable/button_bg_adjust"
+                android:layout_marginBottom="8dp"
+                android:text="Controles de Missão"
+                android:textColor="#1E3A8A"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_start_mission"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="4dp"
+                    android:layout_weight="1"
+                    android:enabled="false"
+                    android:background="@drawable/button_bg_start"
+                    android:textColor="#FFFFFF"
+                    android:text="Iniciar Missão" />
+
+                <!-- Changed to ToggleButton for pause/resume -->
+                <ToggleButton
+                    android:id="@+id/btn_pause"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:layout_weight="1"
+                    android:enabled="false"
+                    android:background="@drawable/button_bg_pause"
+                    android:textColor="#FFFFFF"
+                    android:textOff="Pausar"
+                    android:textOn="Retomar"
+                    android:drawableStart="@drawable/pause_play_selector"
+                    android:paddingStart="8dp" />
+
+                <Button
+                    android:id="@+id/btn_stop_mission"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_weight="1"
+                    android:enabled="false"
+                    android:background="@drawable/button_bg_stop"
+                    android:textColor="#FFFFFF"
+                    android:text="Encerrar" />
+            </LinearLayout>
+
+            <!-- Manual Photo Controls -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:orientation="horizontal">
+
+
+            </LinearLayout>
+
+            <!-- Current Mission Progress -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/rounded_card_bg"
+                android:padding="12dp"
+                android:layout_marginBottom="12dp"
+                android:elevation="2dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:text="Progresso da Missão"
+                    android:textColor="#1E3A8A"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/text_current_structure"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Estrutura: 0/0"
+                        android:textSize="14sp"/>
+
+                    <TextView
+                        android:id="@+id/text_current_photo"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Foto: 0/0"
+                        android:textSize="14sp"/>
+                </LinearLayout>
+
+                <ProgressBar
+                    android:id="@+id/progress_mission"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:progress="0"
+                    android:max="100" />
+            </LinearLayout>
+
+            <!-- Status atual (design aprimorado) -->
+            <TextView
+                android:id="@+id/text_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/status_bg"
+                android:minHeight="36dp"
+                android:padding="10dp"
                 android:textColor="#FFFFFF"
-                android:text="Ajustar Posição" />
+                android:text="Status: Pronto para iniciar missão"
+                android:elevation="3dp" />
+
         </LinearLayout>
 
+        <!-- Tela de galeria de fotos -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="8dp">
+            android:layout_height="match_parent"
+            android:orientation="vertical">
 
-            <Button
-                android:id="@+id/btn_take_photo"
-                android:layout_width="0dp"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="4dp"
-                android:enabled="false"
-                android:background="@drawable/button_bg_photo"
-                android:textColor="#FFFFFF"
-                android:text="Tirar Foto Manual" />
+                android:orientation="horizontal"
+                android:layout_marginBottom="12dp">
 
-            <!-- Botão para simular foto (visível apenas no modo simulador) -->
-            <Button
-                android:id="@+id/btn_simulate_photo"
-                android:layout_width="0dp"
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Galeria de Fotos"
+                    android:textSize="18sp"
+                    android:textColor="#1E3A8A"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_back_to_mission"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/button_bg"
+                    android:textColor="#FFFFFF"
+                    android:text="Voltar à Missão" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/text_no_photos"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="4dp"
-                android:enabled="false"
-                android:background="@drawable/button_bg_photo"
-                android:textColor="#FFFFFF"
-                android:text="Simular Foto"
+                android:text="Nenhuma foto salva ainda"
+                android:textColor="#4B5563"
+                android:textSize="16sp"
+                android:gravity="center"
+                android:layout_marginTop="32dp"
                 android:visibility="gone" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recycler_photos"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_marginBottom="8dp" />
         </LinearLayout>
-    </LinearLayout>
-
-    <!-- Controles de missão com design futurista -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="8dp"
-        android:text="Controles de Missão"
-        android:textColor="#1E3A8A"
-        android:textStyle="bold" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/btn_start_mission"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:layout_weight="1"
-            android:enabled="false"
-            android:background="@drawable/button_bg_start"
-            android:textColor="#FFFFFF"
-            android:text="Iniciar Missão" />
-
-        <Button
-            android:id="@+id/btn_pause"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:layout_weight="1"
-            android:enabled="false"
-            android:background="@drawable/button_bg_pause"
-            android:textColor="#FFFFFF"
-            android:text="Pausar" />
-
-        <Button
-            android:id="@+id/btn_stop_mission"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_weight="1"
-            android:enabled="false"
-            android:background="@drawable/button_bg_stop"
-            android:textColor="#FFFFFF"
-            android:text="Encerrar" />
-    </LinearLayout>
-
-    <!-- Status atual (design aprimorado) -->
-    <TextView
-        android:id="@+id/text_status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@drawable/status_bg"
-        android:minHeight="36dp"
-        android:padding="10dp"
-        android:textColor="#FFFFFF"
-        android:text="Status: Pronto para iniciar missão"
-        android:elevation="3dp" />
+    </ViewFlipper>
 </LinearLayout>

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/rounded_card_bg"
+    android:orientation="horizontal"
+    android:padding="16dp">
+
+    <!-- Left side: Image preview -->
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginEnd="12dp"
+        android:layout_weight="3">
+
+        <ImageView
+            android:id="@+id/popup_image_preview"
+            android:layout_width="match_parent"
+            android:layout_height="240dp"
+            android:scaleType="fitCenter" />
+    </FrameLayout>
+
+    <!-- Right side: Title, details and buttons -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="2"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:text="Confirmar Fotografia"
+            android:textColor="#1E3A8A"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/text_photo_details"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp"
+            android:text="Estrutura: S1 | Posição: P1"
+            android:textColor="#4B5563" />
+
+        <Button
+            android:id="@+id/btn_popup_accept"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/button_bg_confirm"
+            android:text="Aceitar Foto"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btn_popup_retake"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/button_bg_stop"
+            android:text="Refazer Foto"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+</LinearLayout>

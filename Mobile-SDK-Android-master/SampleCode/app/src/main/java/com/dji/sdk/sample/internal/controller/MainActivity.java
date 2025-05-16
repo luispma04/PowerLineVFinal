@@ -7,6 +7,7 @@ import android.app.SearchManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Bundle;
@@ -287,6 +288,17 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
         }
     }
 
+    // ADDED - Configuration change handling
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+
+        // Pass the configuration change to the current view if it's a StructureInspectionMissionView
+        if (stack.size() > 0 && stack.peek().getView() instanceof StructureInspectionMissionView) {
+            ((StructureInspectionMissionView) stack.peek().getView()).onConfigurationChanged(newConfig);
+        }
+    }
+
     //endregion
 
     private void setupActionBar() {
@@ -298,7 +310,6 @@ public class MainActivity extends AppCompatActivity implements StructureInspecti
             titleTextView = (TextView) (actionBar.getCustomView().findViewById(R.id.title_tv));
         }
     }
-
 
     private void setupInAnimations() {
         pushInAnimator = (ObjectAnimator) AnimatorInflater.loadAnimator(this, R.animator.slide_in_right);

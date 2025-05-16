@@ -1,23 +1,32 @@
 package com.dji.sdk.sample.demo.missionoperator;
 
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
+import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.net.Uri;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.Log;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.ToggleButton;
+import android.widget.ViewFlipper;
+import android.widget.ProgressBar;
 
 import com.dji.sdk.sample.R;
 import com.dji.sdk.sample.demo.missionmanager.MissionBaseView;
+import com.dji.sdk.sample.demo.missionoperator.adapter.PhotoGalleryAdapter;
+import com.dji.sdk.sample.demo.missionoperator.util.PhotoStorageManager;
 import com.dji.sdk.sample.internal.controller.DJISampleApplication;
 import com.dji.sdk.sample.internal.utils.ToastUtils;
 
@@ -31,9 +40,11 @@ import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
 import dji.common.camera.SettingsDefinitions;
 import dji.common.error.DJIError;
-import dji.common.error.DJICameraError;
 import dji.common.flightcontroller.FlightControllerState;
 import dji.common.mission.waypoint.Waypoint;
 import dji.common.mission.waypoint.WaypointAction;
@@ -58,11 +69,9 @@ import dji.sdk.mission.MissionControl;
 import dji.sdk.mission.waypoint.WaypointMissionOperator;
 import dji.sdk.mission.waypoint.WaypointMissionOperatorListener;
 import dji.sdk.products.Aircraft;
-import dji.log.DJILog;
 import dji.sdk.base.BaseProduct;
-import dji.sdk.sdkmanager.DJISDKManager;
 
-public class StructureInspectionMissionView extends MissionBaseView {
+public class StructureInspectionMissionView extends MissionBaseView implements PhotoGalleryAdapter.OnPhotoClickListener {
 
     private static final String TAG = "StructureInspection";
 
@@ -76,26 +85,33 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private static final float DEFAULT_SPEED = 5.0f; // Default speed in m/s
     private static final float SAFE_DISTANCE = 5.0f; // Safe distance from structures in meters
 
-    // UI components
+    // UI components - Main view
     private Button btnLoadStructures;
+    private Button btnReviewPhoto;
     private Button btnLoadPhotoPositions;
-    private Button btnConfirmPhoto;
-    private Button btnAdjustPosition;
     private Button btnTakePhoto;
     private Button btnStartMission;
-    private Button btnPause;
+    private ToggleButton btnPause;
     private Button btnStopMission;
-    private Button btnSimulatePhoto; // New button for simulator mode
     private TextView csvInfoText;
     private TextView statusText;
-    private TextView noImageText;
-    private ImageView imagePreview;
+    private ProgressBar progressMission;
+    private TextView currentStructureText;
+    private TextView currentPhotoText;
+    private TextView advancedMissionInfoText;
 
     // Connection status components
     private TextView connectionStatusText;
     private TextView modelTextView;
     private TextView batteryText;
     private TextView droneLocationText;
+
+    // New UI components - Gallery view
+    private ViewFlipper viewFlipper;
+    private Button btnToggleGallery;
+    private Button btnBackToMission;
+    private RecyclerView recyclerPhotos;
+    private TextView noPhotosText;
 
     // Mission components
     private WaypointMissionOperator waypointMissionOperator;
@@ -106,7 +122,10 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private MediaManager mediaManager;
     private FetchMediaTaskScheduler scheduler;
     private Handler handler = new Handler(Looper.getMainLooper());
-    private File mediaStoragePath;
+
+    // Photo storage and gallery components
+    private PhotoStorageManager photoStorageManager;
+    private PhotoGalleryAdapter photoGalleryAdapter;
 
     // Mission data
     private List<InspectionPoint> inspectionPoints;
@@ -114,12 +133,11 @@ public class StructureInspectionMissionView extends MissionBaseView {
     private int currentInspectionIndex = 0;
     private int currentPhotoIndex = 0;
     private boolean isWaitingForReview = false;
-    private boolean isInManualMode = false;
     private Bitmap lastPhotoTaken = null;
     private SettingsDefinitions.StorageLocation storageLocation = SettingsDefinitions.StorageLocation.INTERNAL_STORAGE;
 
     // Flag for simulator mode
-    private boolean isSimulatorMode = false;
+    private boolean isSimulatorMode = true;
     // Store initial home location for return to home functionality
     private double initialHomeLat;
     private double initialHomeLon;
@@ -165,96 +183,334 @@ public class StructureInspectionMissionView extends MissionBaseView {
 
     public StructureInspectionMissionView(Context context, boolean simulatorMode) {
         super(context);
+        Log.d(TAG, "Initializing StructureInspectionMissionView with simulatorMode: " + simulatorMode);
         this.isSimulatorMode = simulatorMode;
         init(context);
-        mediaStoragePath = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM) + "/structure_inspection");
-        if (!mediaStoragePath.exists()) {
-            mediaStoragePath.mkdirs();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+
+        // Re-initialize layout based on new orientation
+        if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            // Inflate landscape layout
+            removeAllViews();
+            inflate(getContext(), R.layout.view_structure_inspection_mission_land, this);
+        } else {
+            // Inflate portrait layout
+            removeAllViews();
+            inflate(getContext(), R.layout.view_structure_inspection_mission, this);
         }
+
+        // Re-initialize all views
+        findViews();
+        setupListeners();
+
+        // Restore current state
+        updateConnectionStatus();
+        updateViewsBasedOnState();
     }
 
     private void init(Context context) {
-        // Initialize UI components
-        inflate(context, R.layout.view_structure_inspection_mission, this);
-
-        btnLoadStructures = findViewById(R.id.btn_load_structures);
-        btnLoadPhotoPositions = findViewById(R.id.btn_load_photo_positions);
-        btnConfirmPhoto = findViewById(R.id.btn_confirm_photo);
-        btnAdjustPosition = findViewById(R.id.btn_adjust_position);
-        btnTakePhoto = findViewById(R.id.btn_take_photo);
-        btnStartMission = findViewById(R.id.btn_start_mission);
-        btnPause = findViewById(R.id.btn_pause);
-        btnStopMission = findViewById(R.id.btn_stop_mission);
-        btnSimulatePhoto = findViewById(R.id.btn_simulate_photo); // Find the new button
-        csvInfoText = findViewById(R.id.text_csv_info);
-        statusText = findViewById(R.id.text_status);
-        noImageText = findViewById(R.id.text_no_image);
-        imagePreview = findViewById(R.id.image_preview);
-
-        // Initialize connection status components
-        connectionStatusText = findViewById(R.id.text_connection_status);
-        modelTextView = findViewById(R.id.text_product_model);
-        batteryText = findViewById(R.id.text_battery_info);
-        droneLocationText = findViewById(R.id.text_drone_location);
-
-        // Initialize connection status if not found in XML layout
-        if (connectionStatusText == null) {
-            connectionStatusText = new TextView(context);
-            connectionStatusText.setId(View.generateViewId());
-            addView(connectionStatusText, 0);
+        // Initialize UI components based on current orientation
+        int orientation = getResources().getConfiguration().orientation;
+        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            inflate(context, R.layout.view_structure_inspection_mission_land, this);
+        } else {
+            inflate(context, R.layout.view_structure_inspection_mission, this);
         }
 
-        if (modelTextView == null) {
-            modelTextView = new TextView(context);
-            modelTextView.setId(View.generateViewId());
-            addView(modelTextView, 1);
-        }
+        // Initialize PhotoStorageManager
+        photoStorageManager = new PhotoStorageManager(context);
 
-        if (batteryText == null) {
-            batteryText = new TextView(context);
-            batteryText.setId(View.generateViewId());
-            addView(batteryText, 2);
-        }
-
-        if (droneLocationText == null) {
-            droneLocationText = new TextView(context);
-            droneLocationText.setId(View.generateViewId());
-            addView(droneLocationText, 3);
-        }
-
-        // Show or hide the simulate photo button based on simulator mode
-        if (btnSimulatePhoto != null) {
-            btnSimulatePhoto.setVisibility(isSimulatorMode ? View.VISIBLE : View.GONE);
-            btnSimulatePhoto.setOnClickListener(this);
-        }
-
-        // Set click listeners
-        btnLoadStructures.setOnClickListener(this);
-        btnLoadPhotoPositions.setOnClickListener(this);
-        btnConfirmPhoto.setOnClickListener(this);
-        btnAdjustPosition.setOnClickListener(this);
-        btnTakePhoto.setOnClickListener(this);
-        btnStartMission.setOnClickListener(this);
-        btnPause.setOnClickListener(this);
-        btnStopMission.setOnClickListener(this);
+        // Find views and set up listeners
+        findViews();
+        setupListeners();
 
         // Initialize mission data
         inspectionPoints = new ArrayList<>();
         photoPoints = new ArrayList<>();
 
+        // Initialize connection status
+        updateConnectionStatus();
+
+        // Initialize photo gallery
+        initPhotoGallery();
+    }
+
+    private void findViews() {
+        // Main mission controls
+        btnLoadStructures = findViewById(R.id.btn_load_structures);
+        btnLoadPhotoPositions = findViewById(R.id.btn_load_photo_positions);
+        //btnTakePhoto = findViewById(R.id.btn_take_photo);
+        btnStartMission = findViewById(R.id.btn_start_mission);
+        btnPause = findViewById(R.id.btn_pause);
+        btnStopMission = findViewById(R.id.btn_stop_mission);
+        csvInfoText = findViewById(R.id.text_csv_info);
+        statusText = findViewById(R.id.text_status);
+        progressMission = findViewById(R.id.progress_mission);
+        currentStructureText = findViewById(R.id.text_current_structure);
+        currentPhotoText = findViewById(R.id.text_current_photo);
+        btnReviewPhoto = findViewById(R.id.btn_review_photo);
+        advancedMissionInfoText = findViewById(R.id.text_advanced_mission_info);
+
+        // Gallery components
+        viewFlipper = findViewById(R.id.view_flipper);
+        btnToggleGallery = findViewById(R.id.btn_toggle_gallery);
+        btnBackToMission = findViewById(R.id.btn_back_to_mission);
+        recyclerPhotos = findViewById(R.id.recycler_photos);
+        noPhotosText = findViewById(R.id.text_no_photos);
+
+        // Connection status components
+        connectionStatusText = findViewById(R.id.text_connection_status);
+        modelTextView = findViewById(R.id.text_product_model);
+        batteryText = findViewById(R.id.text_battery_info);
+        droneLocationText = findViewById(R.id.text_drone_location);
+
         // Initialize button states
-        btnConfirmPhoto.setEnabled(false);
-        btnAdjustPosition.setEnabled(false);
-        btnTakePhoto.setEnabled(false);
+        //btnTakePhoto.setEnabled(false);
         btnStartMission.setEnabled(false);
         btnPause.setEnabled(false);
         btnStopMission.setEnabled(false);
-        if (btnSimulatePhoto != null) {
-            btnSimulatePhoto.setEnabled(false);
+    }
+
+    private void setupListeners() {
+        // Set click listeners for mission controls
+        btnLoadStructures.setOnClickListener(this);
+        btnLoadPhotoPositions.setOnClickListener(this);
+        if (btnReviewPhoto != null) {
+            btnReviewPhoto.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    // Create a simulated photo and show the review dialog
+                    Log.d(TAG, "Manual photo review button clicked");
+                    simulatePhoto();
+                    // Add small delay to ensure bitmap is ready
+                    new Handler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (lastPhotoTaken != null) {
+                                showPhotoConfirmationDialog(lastPhotoTaken);
+                            } else {
+                                Log.e(TAG, "lastPhotoTaken is null!");
+                                // Create emergency placeholder photo if null
+                                Bitmap placeholder = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+                                placeholder.eraseColor(Color.BLUE);
+                                showPhotoConfirmationDialog(placeholder);
+                            }
+                        }
+                    }, 200);
+                }
+            });
+        }
+        //btnTakePhoto.setOnClickListener(this);
+        btnStartMission.setOnClickListener(this);
+        btnStopMission.setOnClickListener(this);
+
+        // Set toggle listener for pause button
+        btnPause.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    // Resume mission
+                    resumeMission();
+                } else {
+                    // Pause mission
+                    pauseMission();
+                }
+            }
+        });
+
+        // Set up gallery toggle buttons
+        if (btnToggleGallery != null) {
+            btnToggleGallery.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showGalleryView();
+                }
+            });
         }
 
-        // Initialize connection status
-        updateConnectionStatus();
+        if (btnBackToMission != null) {
+            btnBackToMission.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showMissionView();
+                }
+            });
+        }
+    }
+
+    private void initPhotoGallery() {
+        // Set up recycler view for photos
+        if (recyclerPhotos != null) {
+            recyclerPhotos.setLayoutManager(new GridLayoutManager(getContext(), 2));
+
+            // Initialize adapter with empty list
+            List<PhotoStorageManager.PhotoInfo> savedPhotos = photoStorageManager.getSavedPhotos();
+            photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), savedPhotos, this);
+            recyclerPhotos.setAdapter(photoGalleryAdapter);
+
+            // Show/hide no photos text
+            if (noPhotosText != null) {
+                noPhotosText.setVisibility(savedPhotos.isEmpty() ? View.VISIBLE : View.GONE);
+            }
+        }
+    }
+
+    // Methods for switching between mission and gallery views
+    private void showGalleryView() {
+        if (viewFlipper != null) {
+            // Refresh photo list before showing gallery
+            photoStorageManager.refresh();
+            updatePhotoGallery();
+
+            viewFlipper.setDisplayedChild(1); // Gallery view index
+        }
+    }
+
+    private void showMissionView() {
+        if (viewFlipper != null) {
+            viewFlipper.setDisplayedChild(0); // Mission view index
+        }
+    }
+
+    private void updatePhotoGallery() {
+        List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getSavedPhotos();
+
+        if (noPhotosText != null) {
+            noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
+        }
+
+        if (photoGalleryAdapter != null) {
+            photoGalleryAdapter.updatePhotoList(photos);
+        }
+    }
+
+    private void updateViewsBasedOnState() {
+        // Update mission progress
+        updateMissionProgress();
+
+        // Update advanced mission information
+        updateAdvancedMissionInfo();
+
+        // Update the button states based on mission state
+        if (btnStartMission != null) {
+            btnStartMission.setEnabled((!inspectionPoints.isEmpty() && !photoPoints.isEmpty()) ||
+                    isMissionPaused || missionPausedForPhotoReview);
+        }
+
+        if (btnPause != null) {
+            btnPause.setEnabled(waypointMissionOperator != null &&
+                    waypointMissionOperator.getCurrentState() == WaypointMissionState.EXECUTING &&
+                    !isMissionPaused && !missionPausedForPhotoReview);
+        }
+
+        if (btnStopMission != null) {
+            btnStopMission.setEnabled(waypointMissionOperator != null &&
+                    (waypointMissionOperator.getCurrentState() == WaypointMissionState.EXECUTING ||
+                            waypointMissionOperator.getCurrentState() == WaypointMissionState.EXECUTION_PAUSED));
+        }
+
+        // Update CSV info
+        if (csvInfoText != null && (!inspectionPoints.isEmpty() || !photoPoints.isEmpty())) {
+            StringBuilder info = new StringBuilder();
+            if (!inspectionPoints.isEmpty()) {
+                info.append(inspectionPoints.size()).append(" estruturas carregadas");
+            }
+            if (!photoPoints.isEmpty()) {
+                if (info.length() > 0) {
+                    info.append(", ");
+                }
+                info.append(photoPoints.size()).append(" posições de foto");
+            }
+            csvInfoText.setText(info.toString());
+        }
+    }
+
+    private void updateMissionProgress() {
+        // Update progress bar and text views with current mission progress
+        if (inspectionPoints.isEmpty() || photoPoints.isEmpty()) {
+            if (progressMission != null) {
+                progressMission.setProgress(0);
+            }
+            if (currentStructureText != null) {
+                currentStructureText.setText("Estrutura: 0/0");
+            }
+            if (currentPhotoText != null) {
+                currentPhotoText.setText("Foto: 0/0");
+            }
+            return;
+        }
+
+        // Show current position in mission
+        if (currentStructureText != null) {
+            currentStructureText.setText(String.format("Estrutura: %d/%d",
+                    Math.min(currentInspectionIndex + 1, inspectionPoints.size()),
+                    inspectionPoints.size()));
+        }
+
+        if (currentPhotoText != null) {
+            currentPhotoText.setText(String.format("Foto: %d/%d",
+                    Math.min(currentPhotoIndex + 1, photoPoints.size()),
+                    photoPoints.size()));
+        }
+
+        // Calculate overall progress percentage
+        int totalPhotos = inspectionPoints.size() * photoPoints.size();
+        int completedPhotos = currentInspectionIndex * photoPoints.size() + currentPhotoIndex;
+        int progressPercent = (totalPhotos > 0) ? (completedPhotos * 100 / totalPhotos) : 0;
+
+        if (progressMission != null) {
+            progressMission.setProgress(progressPercent);
+        }
+    }
+
+    private void updateAdvancedMissionInfo() {
+        if (advancedMissionInfoText == null) return;
+
+        StringBuilder info = new StringBuilder();
+
+        // Add mission parameters
+        info.append("PARÂMETROS DA MISSÃO:\n");
+        info.append("Velocidade: ").append(DEFAULT_SPEED).append(" m/s\n");
+        info.append("Distância segura: ").append(SAFE_DISTANCE).append(" m\n\n");
+
+        // Add mission statistics
+        info.append("ESTATÍSTICAS:\n");
+        info.append("Estruturas: ").append(inspectionPoints.size()).append("\n");
+        info.append("Posições de foto por estrutura: ").append(photoPoints.size()).append("\n");
+        info.append("Total de waypoints: ").append(totalWaypointCount).append("\n\n");
+
+        // Add flight mode information
+        info.append("ESTADO DO VOO:\n");
+        if (flightController != null) {
+            info.append("Modo de voo: ").append(flightState != null ? flightState.name() : "Desconhecido").append("\n");
+        }
+
+        // Add mission state
+        if (waypointMissionOperator != null) {
+            WaypointMissionState state = waypointMissionOperator.getCurrentState();
+            info.append("Estado da missão: ").append(state != null ? state.getName() : "Não iniciada").append("\n\n");
+        }
+
+        // Add current photo info if in mission
+        if (currentInspectionIndex >= 0 && currentPhotoIndex >= 0 && !inspectionPoints.isEmpty() && !photoPoints.isEmpty()) {
+            info.append("POSIÇÃO ATUAL:\n");
+            info.append("Estrutura: ").append(currentInspectionIndex + 1)
+                    .append("/").append(inspectionPoints.size()).append("\n");
+            info.append("Foto: ").append(currentPhotoIndex + 1)
+                    .append("/").append(photoPoints.size()).append("\n");
+
+            // Calculate progress
+            int totalPhotos = inspectionPoints.size() * photoPoints.size();
+            int completedPhotos = currentInspectionIndex * photoPoints.size() + currentPhotoIndex;
+            int progressPercent = (totalPhotos > 0) ? (completedPhotos * 100 / totalPhotos) : 0;
+            info.append("Progresso total: ").append(progressPercent).append("%");
+        }
+
+        advancedMissionInfoText.setText(info.toString());
     }
 
     @Override
@@ -265,25 +521,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
             openFilePicker(REQUEST_STRUCTURES_CSV);
         } else if (id == R.id.btn_load_photo_positions) {
             openFilePicker(REQUEST_PHOTO_POSITIONS_CSV);
-        } else if (id == R.id.btn_confirm_photo) {
-            if (isWaitingForReview) {
-                proceedToNextPhoto();
-            }
-        } else if (id == R.id.btn_adjust_position) {
-            if (isWaitingForReview) {
-                enterManualAdjustmentMode();
-            }
-        } else if (id == R.id.btn_take_photo) {
-            if (isInManualMode) {
-                takeManualPhoto();
-            }
-        } else if (id == R.id.btn_simulate_photo) {
-            if (isSimulatorMode && isWaitingForReview) {
-                simulatePhoto();
-                updateStatus("Foto simulada gerada");
-                enablePhotoReviewButtons();
-            }
-        } else if (id == R.id.btn_start_mission) {
+        }else if (id == R.id.btn_start_mission) {
             if (isMissionPaused || missionPausedForPhotoReview) {
                 resumeMission();
             } else if (mission != null) {
@@ -291,10 +529,8 @@ public class StructureInspectionMissionView extends MissionBaseView {
             } else {
                 createInspectionMission();
             }
-        } else if (id == R.id.btn_pause) {
-            pauseMission();
         } else if (id == R.id.btn_stop_mission) {
-            emergencyAbortMission();
+            stopMissionAndReturnHome();
         }
     }
 
@@ -368,8 +604,11 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         @Override
                         public void run() {
                             if (droneLocationText != null) {
-                                droneLocationText.setText("Location: Lat: " + latitude + ", Lon: " + longitude + ", Alt: " + altitude + "m");
+                                droneLocationText.setText("Localização: Lat: " + latitude + ", Lon: " + longitude + ", Alt: " + altitude + "m");
                             }
+
+                            // Update advanced mission info whenever flight state changes
+                            updateAdvancedMissionInfo();
                         }
                     });
                 }
@@ -434,6 +673,9 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         batteryText.setText("Bateria: N/A");
                     }
                 }
+
+                // Update advanced mission info
+                updateAdvancedMissionInfo();
             }
         });
     }
@@ -551,13 +793,16 @@ public class StructureInspectionMissionView extends MissionBaseView {
             post(new Runnable() {
                 @Override
                 public void run() {
-                    csvInfoText.setText(inspectionPoints.size() + " estruturas carregadas");
+                    if (csvInfoText != null) {
+                        csvInfoText.setText(inspectionPoints.size() + " estruturas carregadas");
+                    }
 
-                    if (!inspectionPoints.isEmpty() && !photoPoints.isEmpty()) {
+                    if (!inspectionPoints.isEmpty() && !photoPoints.isEmpty() && btnStartMission != null) {
                         btnStartMission.setEnabled(true);
                     }
 
                     updateStatus("Carregado " + inspectionPoints.size() + " estruturas");
+                    updateAdvancedMissionInfo();
                 }
             });
 
@@ -600,18 +845,21 @@ public class StructureInspectionMissionView extends MissionBaseView {
             post(new Runnable() {
                 @Override
                 public void run() {
-                    String currentText = csvInfoText.getText().toString();
-                    if (currentText.contains("estruturas carregadas")) {
-                        csvInfoText.setText(currentText + ", " + photoPoints.size() + " posições de foto");
-                    } else {
-                        csvInfoText.setText(photoPoints.size() + " posições de foto carregadas");
+                    if (csvInfoText != null) {
+                        String currentText = csvInfoText.getText().toString();
+                        if (currentText.contains("estruturas carregadas")) {
+                            csvInfoText.setText(currentText + ", " + photoPoints.size() + " posições de foto");
+                        } else {
+                            csvInfoText.setText(photoPoints.size() + " posições de foto carregadas");
+                        }
                     }
 
-                    if (!inspectionPoints.isEmpty() && !photoPoints.isEmpty()) {
+                    if (!inspectionPoints.isEmpty() && !photoPoints.isEmpty() && btnStartMission != null) {
                         btnStartMission.setEnabled(true);
                     }
 
                     updateStatus("Carregado " + photoPoints.size() + " posições de foto");
+                    updateAdvancedMissionInfo();
                 }
             });
 
@@ -710,10 +958,15 @@ public class StructureInspectionMissionView extends MissionBaseView {
             public void run() {
                 if (errorMsg == null) {
                     updateStatus("Missão completa carregada com " + totalWaypointCount + " waypoints");
-                    btnStartMission.setEnabled(true);
+                    if (btnStartMission != null) {
+                        btnStartMission.setEnabled(true);
+                    }
                 } else {
                     updateStatus("Erro ao carregar missão: " + errorMsg);
                 }
+
+                // Update advanced mission info
+                updateAdvancedMissionInfo();
             }
         });
     }
@@ -740,11 +993,21 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                             public void run() {
                                                 if (djiError == null) {
                                                     updateStatus("Missão iniciada");
-                                                    btnPause.setEnabled(true);
-                                                    btnStopMission.setEnabled(true);
-                                                    btnStartMission.setEnabled(false);
+                                                    if (btnPause != null) {
+                                                        btnPause.setEnabled(true);
+                                                        btnPause.setChecked(false); // Set to pause icon
+                                                    }
+                                                    if (btnStopMission != null) {
+                                                        btnStopMission.setEnabled(true);
+                                                    }
+                                                    if (btnStartMission != null) {
+                                                        btnStartMission.setEnabled(false);
+                                                    }
                                                     isMissionPaused = false;
                                                     missionPausedForPhotoReview = false;
+
+                                                    // Update advanced mission info
+                                                    updateAdvancedMissionInfo();
                                                 } else {
                                                     updateStatus("Falha ao iniciar missão: " + djiError.getDescription());
                                                 }
@@ -775,10 +1038,17 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         public void run() {
                             if (djiError == null) {
                                 updateStatus("Missão pausada");
-                                btnPause.setEnabled(false);
-                                btnStartMission.setEnabled(true); // Use same button to resume
-                                btnStartMission.setText("Continuar Missão");
+                                if (btnPause != null) {
+                                    btnPause.setEnabled(false);
+                                }
+                                if (btnStartMission != null) {
+                                    btnStartMission.setEnabled(true); // Use same button to resume
+                                    btnStartMission.setText("Continuar Missão");
+                                }
                                 isMissionPaused = true;
+
+                                // Update advanced mission info
+                                updateAdvancedMissionInfo();
                             } else {
                                 updateStatus("Falha ao pausar missão: " + djiError.getDescription());
                             }
@@ -799,21 +1069,24 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         public void run() {
                             if (djiError == null) {
                                 updateStatus("Missão retomada");
-                                btnPause.setEnabled(true);
-                                btnStartMission.setEnabled(false);
-                                btnStartMission.setText("Iniciar Missão");
+                                if (btnPause != null) {
+                                    btnPause.setEnabled(true);
+                                    btnPause.setChecked(false); // Set to pause icon
+                                }
+                                if (btnStartMission != null) {
+                                    btnStartMission.setEnabled(false);
+                                    btnStartMission.setText("Iniciar Missão");
+                                }
                                 isMissionPaused = false;
 
                                 // Reset photo review flags when resuming
                                 if (missionPausedForPhotoReview) {
                                     missionPausedForPhotoReview = false;
                                     isWaitingForReview = false;
-                                    btnConfirmPhoto.setEnabled(false);
-                                    btnAdjustPosition.setEnabled(false);
-                                    if (btnSimulatePhoto != null) {
-                                        btnSimulatePhoto.setEnabled(false);
-                                    }
                                 }
+
+                                // Update advanced mission info
+                                updateAdvancedMissionInfo();
                             } else {
                                 updateStatus("Falha ao retomar missão: " + djiError.getDescription());
                             }
@@ -824,57 +1097,46 @@ public class StructureInspectionMissionView extends MissionBaseView {
         }
     }
 
-    private void emergencyAbortMission() {
-        updateStatus("Encerrar missão e regressar ao ponto de partida...");
+    private void stopMissionAndReturnHome() {
         if (waypointMissionOperator != null) {
+            // First stop the current mission
             waypointMissionOperator.stopMission(new CommonCallbacks.CompletionCallback() {
                 @Override
-                public void onResult(DJIError djiError) {
-                    if (djiError == null) {
-                        updateStatus("Missão parada com sucesso. Subindo à altitude segura...");
-                        goToSafeAltitudeAndReturnHome();
-                    } else {
-                        updateStatus("Erro ao parar missão: " + djiError.getDescription());
-                    }
-                }
-            });
-        } else {
-            goToSafeAltitudeAndReturnHome();
-        }
-
-        // Desativa os botões para evitar múltiplos cliques
-        btnPause.setEnabled(false);
-        btnStopMission.setEnabled(false);
-        btnStartMission.setEnabled(true);
-    }
-
-    private void goToSafeAltitudeAndReturnHome() {
-        if (flightController == null) {
-            updateStatus("Controlador de voo indisponível");
-            return;
-        }
-
-        final int ALTURA_SEGURA = 50; // metros
-        flightController.setGoHomeHeightInMeters(ALTURA_SEGURA, new CommonCallbacks.CompletionCallback() {
-            @Override
-            public void onResult(DJIError djiError) {
-                if (djiError == null) {
-                    updateStatus("Altitude de retorno definida para " + ALTURA_SEGURA + "m. Iniciando retorno...");
-                    flightController.startGoHome(new CommonCallbacks.CompletionCallback() {
+                public void onResult(final DJIError djiError) {
+                    post(new Runnable() {
                         @Override
-                        public void onResult(DJIError djiError) {
+                        public void run() {
                             if (djiError == null) {
-                                updateStatus("Drone a regressar ao ponto de partida.");
+                                updateStatus("Missão encerrada, retornando para posição inicial...");
+
+                                // Create a return to home mission
+                                createReturnToHomeMission();
+
+                                // Reset UI
+                                if (btnPause != null) {
+                                    btnPause.setEnabled(false);
+                                    btnPause.setChecked(false); // Set to pause icon
+                                }
+                                if (btnStopMission != null) {
+                                    btnStopMission.setEnabled(false);
+                                }
+                                if (btnStartMission != null) {
+                                    btnStartMission.setEnabled(true);
+                                    btnStartMission.setText("Iniciar Missão");
+                                }
+                                isMissionPaused = false;
+                                missionPausedForPhotoReview = false;
+
+                                // Update advanced mission info
+                                updateAdvancedMissionInfo();
                             } else {
-                                updateStatus("Erro ao iniciar retorno: " + djiError.getDescription());
+                                updateStatus("Falha ao encerrar missão: " + djiError.getDescription());
                             }
                         }
                     });
-                } else {
-                    updateStatus("Erro ao definir altitude de retorno: " + djiError.getDescription());
                 }
-            }
-        });
+            });
+        }
     }
 
     private void createReturnToHomeMission() {
@@ -1006,6 +1268,15 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         }
                     }
 
+                    // Update mission progress
+                    post(new Runnable() {
+                        @Override
+                        public void run() {
+                            updateMissionProgress();
+                            updateAdvancedMissionInfo();
+                        }
+                    });
+
                     // Update status with current progress
                     updateStatus("Waypoint: " + currentWaypointIndex + "/" + totalWaypointCount +
                             " | Estrutura: " + (currentInspectionIndex+1) + "/" + inspectionPoints.size() +
@@ -1037,23 +1308,25 @@ public class StructureInspectionMissionView extends MissionBaseView {
                             updateStatus("Missão concluída com sucesso");
 
                             // Reset UI
-                            btnPause.setEnabled(false);
-                            btnStopMission.setEnabled(false);
-                            btnStartMission.setEnabled(true);
-                            btnStartMission.setText("Iniciar Missão");
+                            if (btnPause != null) {
+                                btnPause.setEnabled(false);
+                                btnPause.setChecked(false); // Set to pause icon
+                            }
+                            if (btnStopMission != null) {
+                                btnStopMission.setEnabled(false);
+                            }
+                            if (btnStartMission != null) {
+                                btnStartMission.setEnabled(true);
+                                btnStartMission.setText("Iniciar Missão");
+                            }
                             isMissionPaused = false;
                             missionPausedForPhotoReview = false;
 
                             // Reset photo review states
                             isWaitingForReview = false;
-                            isInManualMode = false;
-                            btnConfirmPhoto.setEnabled(false);
-                            btnAdjustPosition.setEnabled(false);
-                            btnTakePhoto.setEnabled(false);
-                            if (btnSimulatePhoto != null) {
-                                btnSimulatePhoto.setEnabled(false);
-                            }
 
+                            // Update advanced mission info
+                            updateAdvancedMissionInfo();
                         } else {
                             updateStatus("Falha na execução da missão: " + error.getDescription());
                         }
@@ -1081,17 +1354,46 @@ public class StructureInspectionMissionView extends MissionBaseView {
                         post(new Runnable() {
                             @Override
                             public void run() {
-                                btnPause.setEnabled(false);
-                                btnStartMission.setEnabled(false); // Will be enabled after photo review
-                                btnStartMission.setText("Continuar Missão");
+                                if (btnPause != null) {
+                                    btnPause.setEnabled(false);
+                                    btnPause.setChecked(true); // Set to resume icon
+                                }
+                                if (btnStartMission != null) {
+                                    btnStartMission.setEnabled(false); // Will be enabled after photo review
+                                    btnStartMission.setText("Continuar Missão");
+                                }
+
+                                // Update advanced mission info
+                                updateAdvancedMissionInfo();
                             }
                         });
 
-                        // Fetch the photo for review
+                        // Fetch the photo for review - with special handling for simulator mode
                         if (isSimulatorMode) {
-                            simulatePhoto();
-                            updateStatus("Foto simulada gerada automaticamente (modo simulador)");
-                            enablePhotoReviewButtons();
+                            // Force create a simulated photo and ensure it's run on the UI thread
+                            post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Log.d(TAG, "Simulating photo in simulator mode");
+                                    simulatePhoto();
+                                    Log.d(TAG, "About to show photo dialog with simulated photo");
+                                    // Add small delay to ensure bitmap is ready
+                                    new Handler().postDelayed(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            if (lastPhotoTaken != null) {
+                                                showPhotoConfirmationDialog(lastPhotoTaken);
+                                            } else {
+                                                Log.e(TAG, "lastPhotoTaken is null!");
+                                                // Create emergency placeholder photo if null
+                                                Bitmap placeholder = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+                                                placeholder.eraseColor(Color.BLUE);
+                                                showPhotoConfirmationDialog(placeholder);
+                                            }
+                                        }
+                                    }, 200);
+                                }
+                            });
                         } else {
                             fetchLatestPhotoForReview();
                         }
@@ -1121,7 +1423,7 @@ public class StructureInspectionMissionView extends MissionBaseView {
             // Without mediaManager, just simulate a photo
             updateStatus("MediaManager não disponível. Foto simulada.");
             simulatePhoto();
-            enablePhotoReviewButtons();
+            showPhotoConfirmationDialog(lastPhotoTaken);
         }
     }
 
@@ -1138,14 +1440,14 @@ public class StructureInspectionMissionView extends MissionBaseView {
                     } else {
                         updateStatus("Erro ao atualizar lista de arquivos: " + djiError.getDescription());
                         simulatePhoto();
-                        enablePhotoReviewButtons();
+                        showPhotoConfirmationDialog(lastPhotoTaken);
                     }
                 }
             });
         } else {
             updateStatus("MediaManager ou câmera não disponível");
             simulatePhoto();
-            enablePhotoReviewButtons();
+            showPhotoConfirmationDialog(lastPhotoTaken);
         }
     }
 
@@ -1167,12 +1469,12 @@ public class StructureInspectionMissionView extends MissionBaseView {
             } else {
                 updateStatus("Nenhuma foto encontrada");
                 simulatePhoto();
-                enablePhotoReviewButtons();
+                showPhotoConfirmationDialog(lastPhotoTaken);
             }
         } else {
             updateStatus("MediaManager não disponível");
             simulatePhoto();
-            enablePhotoReviewButtons();
+            showPhotoConfirmationDialog(lastPhotoTaken);
         }
     }
 
@@ -1188,21 +1490,20 @@ public class StructureInspectionMissionView extends MissionBaseView {
                                 post(new Runnable() {
                                     @Override
                                     public void run() {
-                                        displayPhoto(thumbnail);
                                         lastPhotoTaken = thumbnail;
-                                        enablePhotoReviewButtons();
+                                        showPhotoConfirmationDialog(thumbnail);
                                     }
                                 });
                             } else {
                                 updateStatus("Thumbnail não disponível");
                                 simulatePhoto();
-                                enablePhotoReviewButtons();
+                                showPhotoConfirmationDialog(lastPhotoTaken);
                             }
                         }
                     } else {
                         updateStatus("Erro ao obter thumbnail: " + error.getDescription());
                         simulatePhoto();
-                        enablePhotoReviewButtons();
+                        showPhotoConfirmationDialog(lastPhotoTaken);
                     }
                 }
             });
@@ -1211,183 +1512,266 @@ public class StructureInspectionMissionView extends MissionBaseView {
         } else {
             updateStatus("Scheduler ou arquivo de mídia inválido");
             simulatePhoto();
-            enablePhotoReviewButtons();
+            showPhotoConfirmationDialog(lastPhotoTaken);
         }
     }
 
     private void simulatePhoto() {
         // For development purposes, create a simulated photo
-        post(new Runnable() {
-            @Override
-            public void run() {
-                // Create a simulated image
-                Bitmap bitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+        Log.d(TAG, "Simulating photo in simulator mode");
 
-                // Create a more visually interesting simulated photo based on structure and photo indices
-                int r = (currentInspectionIndex * 50) % 255;
-                int g = (currentPhotoIndex * 40) % 255;
-                int b = (currentInspectionIndex * currentPhotoIndex * 30) % 255;
+        // Create a simulated image
+        Bitmap bitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
 
-                bitmap.eraseColor(Color.rgb(r, g, b));
+        // Create a more visually interesting simulated photo based on structure and photo indices
+        int r = (currentInspectionIndex * 50) % 255;
+        int g = (currentPhotoIndex * 40) % 255;
+        int b = (currentInspectionIndex * currentPhotoIndex * 30) % 255;
 
-                displayPhoto(bitmap);
-                lastPhotoTaken = bitmap;
-                isWaitingForReview = true;
+        bitmap.eraseColor(Color.rgb(r, g, b));
 
-                // If we're in simulator mode, enable the simulated photo button
-                if (isSimulatorMode && btnSimulatePhoto != null) {
-                    btnSimulatePhoto.setEnabled(true);
-                }
-            }
-        });
+        lastPhotoTaken = bitmap;
+        isWaitingForReview = true;
+
+        Log.d(TAG, "Simulated photo created with colors R:" + r + " G:" + g + " B:" + b);
     }
 
-    private void displayPhoto(final Bitmap photo) {
-        post(new Runnable() {
+    // Method to take photos manually (used during mission and for manual photo button)
+    // Method to take photos manually (always simulates for now)
+    private void takePhoto() {
+        // COMMENTED OUT FOR FUTURE USE - Real camera functionality
+    /*
+    if (camera != null && !isSimulatorMode) {
+        camera.setShootPhotoMode(SettingsDefinitions.ShootPhotoMode.SINGLE, new CommonCallbacks.CompletionCallback() {
             @Override
-            public void run() {
-                if (photo != null) {
-                    imagePreview.setImageBitmap(photo);
-                    noImageText.setVisibility(View.GONE);
-                } else {
-                    imagePreview.setImageBitmap(null);
-                    noImageText.setVisibility(View.VISIBLE);
-                }
+            public void onResult(final DJIError djiError) {
+                post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (djiError == null) {
+                            // Photo mode set, now take the photo
+                            camera.startShootPhoto(new CommonCallbacks.CompletionCallback() {
+                                @Override
+                                public void onResult(final DJIError djiError) {
+                                    post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            if (djiError == null) {
+                                                updateStatus("Foto tirada com sucesso");
+
+                                                // Wait a moment for the drone to process the photo
+                                                new Handler().postDelayed(new Runnable() {
+                                                    @Override
+                                                    public void run() {
+                                                        // Show the photo for review
+                                                        fetchLatestPhotoForReview();
+                                                    }
+                                                }, 2000); // 2 seconds
+                                            } else {
+                                                updateStatus("Falha ao tirar foto: " + djiError.getDescription());
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                        } else {
+                            updateStatus("Falha ao configurar modo de foto: " + djiError.getDescription());
+                        }
+                    }
+                });
             }
         });
-    }
-
-    private void enablePhotoReviewButtons() {
+    } else {
+    */
+        // Always use simulation for now
+        updateStatus("Tirando foto simulada...");
+        simulatePhoto();
         post(new Runnable() {
             @Override
             public void run() {
-                btnConfirmPhoto.setEnabled(true);
-                btnAdjustPosition.setEnabled(true);
-                btnTakePhoto.setEnabled(false);
-                btnStartMission.setEnabled(false);
+                showPhotoConfirmationDialog(lastPhotoTaken);
             }
         });
+        //}
     }
 
-    private void proceedToNextPhoto() {
-        // Immediately resume the mission when photo is confirmed
-        post(new Runnable() {
+    // Method to show photo confirmation dialog with the new layout
+    // Method to show photo confirmation dialog with orientation support
+    private void showPhotoConfirmationDialog(Bitmap photo) {
+        Log.d(TAG, "Showing photo confirmation dialog");
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
+
+        // Check orientation and use appropriate layout
+        int orientation = getResources().getConfiguration().orientation;
+        View dialogView;
+        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            dialogView = LayoutInflater.from(getContext()).inflate(R.layout.dialog_photo_confirmation_land, null);
+        } else {
+            dialogView = LayoutInflater.from(getContext()).inflate(R.layout.dialog_photo_confirmation, null);
+        }
+
+        builder.setView(dialogView);
+
+        // Set up the dialog components
+        ImageView photoImageView = dialogView.findViewById(R.id.popup_image_preview);
+        TextView photoDetailsText = dialogView.findViewById(R.id.text_photo_details);
+        Button retakeButton = dialogView.findViewById(R.id.btn_popup_retake);
+        Button acceptButton = dialogView.findViewById(R.id.btn_popup_accept);
+
+        // Set photo and details
+        photoImageView.setImageBitmap(photo);
+        photoDetailsText.setText("Estrutura: S" + (currentInspectionIndex + 1) + " | Posição: P" + (currentPhotoIndex + 1));
+
+        final AlertDialog dialog = builder.create();
+        dialog.setCancelable(false); // Prevent dismissing by tapping outside
+
+        // Set up button click listeners
+        retakeButton.setOnClickListener(new OnClickListener() {
             @Override
-            public void run() {
-                btnConfirmPhoto.setEnabled(false);
-                btnAdjustPosition.setEnabled(false);
-                btnStartMission.setEnabled(false);
+            public void onClick(View v) {
+                dialog.dismiss();
+                // Retake the photo
+                takePhoto();
+            }
+        });
+
+        acceptButton.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dialog.dismiss();
+
+                // Save the photo to storage
+                savePhotoToStorage(photo);
+
+                // Accept photo and proceed
                 isWaitingForReview = false;
-
-                if (btnSimulatePhoto != null) {
-                    btnSimulatePhoto.setEnabled(false);
-                }
-
                 updateStatus("Foto confirmada. Retomando missão...");
 
-                // Resume the mission immediately
-                resumeMission();
-            }
-        });
-    }
-
-    private void enterManualAdjustmentMode() {
-        post(new Runnable() {
-            @Override
-            public void run() {
-                // Disable mission control and enable manual flight
-                isWaitingForReview = false;
-                isInManualMode = true;
-
-                btnConfirmPhoto.setEnabled(false);
-                btnAdjustPosition.setEnabled(false);
-                btnTakePhoto.setEnabled(true);
-                btnStartMission.setEnabled(false);
-
-                if (btnSimulatePhoto != null) {
-                    btnSimulatePhoto.setEnabled(false);
+                // Resume the mission after a short delay
+                if (btnStartMission != null) {
+                    btnStartMission.setEnabled(true);
                 }
 
-                updateStatus("Modo de ajuste manual ativado. Use o controle remoto para posicionar o drone, depois tire uma foto.");
-            }
-        });
-    }
-
-    private void takeManualPhoto() {
-        if (camera != null) {
-            camera.setShootPhotoMode(SettingsDefinitions.ShootPhotoMode.SINGLE, new CommonCallbacks.CompletionCallback() {
-                @Override
-                public void onResult(final DJIError djiError) {
-                    post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (djiError == null) {
-                                // Photo mode set, now take the photo
-                                camera.startShootPhoto(new CommonCallbacks.CompletionCallback() {
-                                    @Override
-                                    public void onResult(final DJIError djiError) {
-                                        post(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                if (djiError == null) {
-                                                    updateStatus("Foto tirada manualmente com sucesso");
-                                                    // Exit manual mode
-                                                    isInManualMode = false;
-                                                    btnTakePhoto.setEnabled(false);
-
-                                                    // Wait a moment for the drone to process the photo
-                                                    new Handler().postDelayed(new Runnable() {
-                                                        @Override
-                                                        public void run() {
-                                                            // Show the photo for review
-                                                            fetchLatestPhotoForReview();
-
-                                                            // Only enable confirm button (will auto-resume on confirm)
-                                                            post(new Runnable() {
-                                                                @Override
-                                                                public void run() {
-                                                                    btnConfirmPhoto.setEnabled(true);
-                                                                    btnStartMission.setEnabled(false);
-                                                                    updateStatus("Foto manual tirada. Confirme para continuar a missão.");
-                                                                }
-                                                            });
-                                                        }
-                                                    }, 2000); // 2 seconds
-                                                } else {
-                                                    updateStatus("Falha ao tirar foto: " + djiError.getDescription());
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
-                            } else {
-                                updateStatus("Falha ao configurar modo de foto: " + djiError.getDescription());
-                            }
-                        }
-                    });
-                }
-            });
-        } else {
-            // Simulation for when camera is not available or in simulator mode
-            simulatePhoto();
-            updateStatus("Foto simulada tirada manualmente");
-            isInManualMode = false;
-            post(new Runnable() {
-                @Override
-                public void run() {
-                    btnTakePhoto.setEnabled(false);
-                    btnConfirmPhoto.setEnabled(true);
-                    btnAdjustPosition.setEnabled(false); // Disable adjust since we already adjusted
-                    btnStartMission.setEnabled(false); // Don't need this since confirm will resume
-
-                    if (isSimulatorMode && btnSimulatePhoto != null) {
-                        btnSimulatePhoto.setEnabled(false);
+                new Handler().postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        resumeMission();
                     }
+                }, 500);
+            }
+        });
 
-                    updateStatus("Foto manual simulada. Confirme para continuar a missão.");
+        dialog.show();
+    }
+
+    // Method to save photo to storage
+    private void savePhotoToStorage(Bitmap photo) {
+        if (photo != null && photoStorageManager != null) {
+            // Save photo using PhotoStorageManager
+            PhotoStorageManager.PhotoInfo savedPhoto =
+                    photoStorageManager.savePhoto(photo, currentInspectionIndex + 1, currentPhotoIndex + 1);
+
+            if (savedPhoto != null) {
+                updateStatus("Foto salva em: " + savedPhoto.getFilename());
+
+                // Update photo gallery if visible
+                if (viewFlipper != null && viewFlipper.getDisplayedChild() == 1) {
+                    updatePhotoGallery();
                 }
-            });
+            } else {
+                updateStatus("Erro ao salvar foto");
+            }
         }
+    }
+
+    // Implementation of PhotoGalleryAdapter.OnPhotoClickListener
+    @Override
+    public void onPhotoClick(PhotoStorageManager.PhotoInfo photoInfo) {
+        // Show full screen photo view
+        showFullscreenPhotoView(photoInfo);
+    }
+
+    @Override
+    public void onDownloadClick(PhotoStorageManager.PhotoInfo photoInfo) {
+        // Share photo with other apps
+        sharePhoto(photoInfo);
+    }
+
+    @Override
+    public void onDeleteClick(PhotoStorageManager.PhotoInfo photoInfo) {
+        // Confirm before deletion
+        new AlertDialog.Builder(getContext())
+                .setTitle("Confirmar Exclusão")
+                .setMessage("Deseja excluir esta foto?")
+                .setPositiveButton("Sim", (dialog, which) -> {
+                    // Delete the photo
+                    if (photoStorageManager.deletePhoto(photoInfo)) {
+                        updateStatus("Foto excluída com sucesso");
+                        updatePhotoGallery();
+                    } else {
+                        updateStatus("Erro ao excluir foto");
+                    }
+                })
+                .setNegativeButton("Não", null)
+                .show();
+    }
+
+    // Method to show fullscreen photo view
+    private void showFullscreenPhotoView(PhotoStorageManager.PhotoInfo photoInfo) {
+        if (photoInfo == null) return;
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
+        View fullscreenView = LayoutInflater.from(getContext()).inflate(R.layout.fullscreen_photo_view, null);
+        builder.setView(fullscreenView);
+
+        // Get components
+        ImageView fullscreenImage = fullscreenView.findViewById(R.id.image_fullscreen_photo);
+        TextView photoInfoText = fullscreenView.findViewById(R.id.text_fullscreen_photo_info);
+        Button closeButton = fullscreenView.findViewById(R.id.btn_close_fullscreen);
+        Button shareButton = fullscreenView.findViewById(R.id.btn_share_photo);
+        Button deleteButton = fullscreenView.findViewById(R.id.btn_delete_fullscreen);
+
+        // Set photo and info
+        Bitmap photoBitmap = BitmapFactory.decodeFile(photoInfo.getFile().getAbsolutePath());
+        fullscreenImage.setImageBitmap(photoBitmap);
+        photoInfoText.setText(photoInfo.getStructureId() + " | " + photoInfo.getPhotoId() + " | " + photoInfo.getTimestamp());
+
+        final AlertDialog dialog = builder.create();
+
+        // Set button listeners
+        closeButton.setOnClickListener(v -> dialog.dismiss());
+
+        shareButton.setOnClickListener(v -> {
+            dialog.dismiss();
+            sharePhoto(photoInfo);
+        });
+
+        deleteButton.setOnClickListener(v -> {
+            dialog.dismiss();
+            // Show delete confirmation
+            onDeleteClick(photoInfo);
+        });
+
+        dialog.show();
+    }
+
+    // Method to share photo with other apps
+    private void sharePhoto(PhotoStorageManager.PhotoInfo photoInfo) {
+        if (photoInfo == null || !photoInfo.getFile().exists()) {
+            updateStatus("Arquivo de foto não encontrado");
+            return;
+        }
+
+        Intent shareIntent = new Intent(Intent.ACTION_SEND);
+        shareIntent.setType("image/jpeg");
+
+        // Create URI for the photo
+        Uri photoUri = Uri.fromFile(photoInfo.getFile());
+        shareIntent.putExtra(Intent.EXTRA_STREAM, photoUri);
+        shareIntent.putExtra(Intent.EXTRA_SUBJECT, "Foto de Inspeção: " + photoInfo.getStructureId() + " " + photoInfo.getPhotoId());
+
+        getContext().startActivity(Intent.createChooser(shareIntent, "Compartilhar via"));
     }
 
     public void updateStatus(final String message) {
