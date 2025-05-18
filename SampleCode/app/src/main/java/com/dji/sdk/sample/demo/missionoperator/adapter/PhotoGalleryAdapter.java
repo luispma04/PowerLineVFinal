@@ -3,6 +3,7 @@ package com.dji.sdk.sample.demo.missionoperator.adapter;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,10 +20,11 @@ import com.dji.sdk.sample.demo.missionoperator.util.PhotoStorageManager;
 import java.util.List;
 
 /**
- * Adapter for displaying the saved photos in a RecyclerView
+ * Adaptador para exibir fotos em um RecyclerView
  */
 public class PhotoGalleryAdapter extends RecyclerView.Adapter<PhotoGalleryAdapter.PhotoViewHolder> {
 
+    private static final String TAG = "PhotoGalleryAdapter";
     private List<PhotoStorageManager.PhotoInfo> photoList;
     private Context context;
     private OnPhotoClickListener photoClickListener;
@@ -48,35 +50,63 @@ public class PhotoGalleryAdapter extends RecyclerView.Adapter<PhotoGalleryAdapte
 
     @Override
     public void onBindViewHolder(@NonNull PhotoViewHolder holder, int position) {
-        PhotoStorageManager.PhotoInfo photoInfo = photoList.get(position);
+        if (position >= photoList.size()) {
+            Log.e(TAG, "onBindViewHolder: position out of bounds");
+            return;
+        }
 
-        // Load thumbnail
-        Bitmap thumbnail = BitmapFactory.decodeFile(photoInfo.getFile().getAbsolutePath());
-        holder.photoImageView.setImageBitmap(thumbnail);
+        final PhotoStorageManager.PhotoInfo photoInfo = photoList.get(position);
+        if (photoInfo == null || photoInfo.getFile() == null) {
+            Log.e(TAG, "onBindViewHolder: photoInfo is null");
+            return;
+        }
 
-        // Set photo info
-        holder.structureIdText.setText("Estrutura: " + photoInfo.getStructureId());
-        holder.photoIdText.setText("Foto: " + photoInfo.getPhotoId());
-        holder.timestampText.setText(photoInfo.getTimestamp());
-
-        // Set click listeners
-        holder.photoImageView.setOnClickListener(v -> {
-            if (photoClickListener != null) {
-                photoClickListener.onPhotoClick(photoInfo);
+        try {
+            // Carregar a miniatura
+            if (photoInfo.getFile().exists()) {
+                Bitmap thumbnail = BitmapFactory.decodeFile(photoInfo.getFile().getAbsolutePath());
+                holder.photoImageView.setImageBitmap(thumbnail);
+            } else {
+                Log.e(TAG, "File doesn't exist: " + photoInfo.getFile().getAbsolutePath());
+                holder.photoImageView.setImageResource(R.drawable.rounded_card_bg); // Imagem de fallback
             }
-        });
 
-        holder.downloadButton.setOnClickListener(v -> {
-            if (photoClickListener != null) {
-                photoClickListener.onDownloadClick(photoInfo);
-            }
-        });
+            // Configurar as informações da foto
+            holder.structureIdText.setText("Estrutura: " + photoInfo.getStructureId());
+            holder.photoIdText.setText("Foto: " + photoInfo.getPhotoId());
+            holder.timestampText.setText(photoInfo.getTimestamp());
 
-        holder.deleteButton.setOnClickListener(v -> {
-            if (photoClickListener != null) {
-                photoClickListener.onDeleteClick(photoInfo);
-            }
-        });
+            // Definir os listeners dos botões
+            holder.photoImageView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (photoClickListener != null) {
+                        photoClickListener.onPhotoClick(photoInfo);
+                    }
+                }
+            });
+
+            holder.downloadButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (photoClickListener != null) {
+                        photoClickListener.onDownloadClick(photoInfo);
+                    }
+                }
+            });
+
+            holder.deleteButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Log.d(TAG, "Delete button clicked for: " + photoInfo.getFilename());
+                    if (photoClickListener != null) {
+                        photoClickListener.onDeleteClick(photoInfo);
+                    }
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Error binding view holder: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -85,8 +115,8 @@ public class PhotoGalleryAdapter extends RecyclerView.Adapter<PhotoGalleryAdapte
     }
 
     /**
-     * Update the photo list and refresh the adapter
-     * @param photos The new list of photos
+     * Atualiza a lista de fotos e notifica o adaptador
+     * @param photos A nova lista de fotos
      */
     public void updatePhotoList(List<PhotoStorageManager.PhotoInfo> photos) {
         this.photoList = photos;
