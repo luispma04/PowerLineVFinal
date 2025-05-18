@@ -28,7 +28,6 @@ import com.dji.sdk.sample.demo.missionmanager.MissionBaseView;
 import com.dji.sdk.sample.demo.missionoperator.adapter.PhotoGalleryAdapter;
 import com.dji.sdk.sample.demo.missionoperator.util.PhotoStorageManager;
 import com.dji.sdk.sample.internal.controller.DJISampleApplication;
-import com.dji.sdk.sample.internal.utils.ToastUtils;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -37,6 +36,13 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
+import android.os.Environment;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -1810,21 +1816,97 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     }
 
     // Method to share photo with other apps
+    // Method to share photo with other apps - Versão ultra-compatível
     private void sharePhoto(PhotoStorageManager.PhotoInfo photoInfo) {
         if (photoInfo == null || !photoInfo.getFile().exists()) {
             updateStatus("Arquivo de foto não encontrado");
             return;
         }
 
-        Intent shareIntent = new Intent(Intent.ACTION_SEND);
-        shareIntent.setType("image/jpeg");
+        try {
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("image/jpeg");
 
-        // Create URI for the photo
-        Uri photoUri = Uri.fromFile(photoInfo.getFile());
-        shareIntent.putExtra(Intent.EXTRA_STREAM, photoUri);
-        shareIntent.putExtra(Intent.EXTRA_SUBJECT, "Foto de Inspeção: " + photoInfo.getStructureId() + " " + photoInfo.getPhotoId());
+            // Use FileProvider para compatibilidade com Android 7.0+
+            Uri photoUri;
 
-        getContext().startActivity(Intent.createChooser(shareIntent, "Compartilhar via"));
+            // Verificar versão do Android
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                // Para Android 7.0 (API 24) ou superior, use FileProvider
+                String authority = getContext().getPackageName() + ".fileprovider";
+                photoUri = androidx.core.content.FileProvider.getUriForFile(
+                        getContext(),
+                        authority,
+                        photoInfo.getFile());
+
+                // Conceder permissão de leitura temporária
+                shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } else {
+                // Para versões mais antigas, o método tradicional ainda funciona
+                photoUri = Uri.fromFile(photoInfo.getFile());
+            }
+
+            shareIntent.putExtra(Intent.EXTRA_STREAM, photoUri);
+            shareIntent.putExtra(Intent.EXTRA_SUBJECT, "Foto de Inspeção: " +
+                    photoInfo.getStructureId() + " " + photoInfo.getPhotoId());
+
+            getContext().startActivity(Intent.createChooser(shareIntent, "Compartilhar via"));
+        } catch (Exception e) {
+            // Registra e exibe o erro para depuração
+            Log.e(TAG, "Erro ao compartilhar foto: " + e.getMessage(), e);
+            updateStatus("Erro ao compartilhar foto: " + e.getMessage());
+
+            // Fallback alternativo simplificado
+            File downloadDir = new File(Environment.getExternalStorageDirectory(), "Download");
+            if (!downloadDir.exists()) {
+                downloadDir.mkdirs();
+            }
+
+            File destFile = new File(downloadDir, photoInfo.getFilename());
+            boolean success = false;
+
+            try {
+                success = copyFileUsingStream(photoInfo.getFile(), destFile);
+                if (success) {
+                    updateStatus("Foto salva em Downloads: " + destFile.getName());
+                } else {
+                    updateStatus("Não foi possível salvar a foto em Downloads");
+                }
+            } catch (Exception ex) {
+                Log.e(TAG, "Erro no método alternativo: " + ex.getMessage(), ex);
+                updateStatus("Não foi possível compartilhar ou salvar a foto");
+            }
+        }
+    }
+
+    // Método para copiar arquivos usando streams (mais básico e compatível)
+    private boolean copyFileUsingStream(File source, File dest) {
+        InputStream is = null;
+        OutputStream os = null;
+        try {
+            is = new BufferedInputStream(new FileInputStream(source));
+            os = new BufferedOutputStream(new FileOutputStream(dest));
+            byte[] buffer = new byte[1024];
+            int length;
+            while ((length = is.read(buffer)) > 0) {
+                os.write(buffer, 0, length);
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Erro ao copiar arquivo: " + e.getMessage(), e);
+            return false;
+        } finally {
+            try {
+                if (is != null) is.close();
+            } catch (Exception e) {
+                // Ignorar
+            }
+            try {
+                if (os != null) os.close();
+            } catch (Exception e) {
+                // Ignorar
+            }
+        }
     }
 
     public void updateStatus(final String message) {
