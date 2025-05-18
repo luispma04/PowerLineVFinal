@@ -26,8 +26,10 @@ import android.widget.ProgressBar;
 import com.dji.sdk.sample.R;
 import com.dji.sdk.sample.demo.missionmanager.MissionBaseView;
 import com.dji.sdk.sample.demo.missionoperator.adapter.PhotoGalleryAdapter;
+import com.dji.sdk.sample.demo.missionoperator.adapter.StructureFolderAdapter;
 import com.dji.sdk.sample.demo.missionoperator.util.PhotoStorageManager;
 import com.dji.sdk.sample.internal.controller.DJISampleApplication;
+import com.dji.sdk.sample.internal.utils.ToastUtils;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -52,6 +54,8 @@ import androidx.recyclerview.widget.RecyclerView;
 import dji.common.camera.SettingsDefinitions;
 import dji.common.error.DJIError;
 import dji.common.flightcontroller.FlightControllerState;
+import dji.common.flightcontroller.ObstacleDetectionSector;
+import dji.common.flightcontroller.VisionDetectionState;
 import dji.common.mission.waypoint.Waypoint;
 import dji.common.mission.waypoint.WaypointAction;
 import dji.common.mission.waypoint.WaypointActionType;
@@ -65,6 +69,7 @@ import dji.common.mission.waypoint.WaypointMissionState;
 import dji.common.mission.waypoint.WaypointMissionUploadEvent;
 import dji.common.util.CommonCallbacks;
 import dji.sdk.camera.Camera;
+import dji.sdk.flightcontroller.FlightAssistant;
 import dji.sdk.flightcontroller.FlightController;
 import dji.sdk.media.FetchMediaTask;
 import dji.sdk.media.FetchMediaTaskContent;
@@ -112,16 +117,31 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private TextView batteryText;
     private TextView droneLocationText;
 
-    // New UI components - Gallery view
+    // Gallery components - Main gallery view
     private ViewFlipper viewFlipper;
     private Button btnToggleGallery;
     private Button btnBackToMission;
     private RecyclerView recyclerPhotos;
     private TextView noPhotosText;
 
+    // Gallery structure components
+    private ViewFlipper galleryViewFlipper;
+    private RecyclerView recyclerStructures;
+    private TextView noStructuresText;
+    private Button btnBackToStructures;
+    private TextView structureTitleText;
+    private TextView galleryTitleText;
+
+    // Adaptadores separados para fotos e estruturas
+    private PhotoGalleryAdapter photoGalleryAdapter;
+    private StructureFolderAdapter structureFolderAdapter;
+
+    private int currentStructureId = -1;
+
     // Mission components
     private WaypointMissionOperator waypointMissionOperator;
     private FlightController flightController;
+    private FlightAssistant flightAssistant;
     private Camera camera;
     private WaypointMission mission;
     private WaypointMissionOperatorListener listener;
@@ -131,7 +151,6 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
     // Photo storage and gallery components
     private PhotoStorageManager photoStorageManager;
-    private PhotoGalleryAdapter photoGalleryAdapter;
 
     // Mission data
     private List<InspectionPoint> inspectionPoints;
@@ -153,6 +172,11 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     // Track created waypoints
     private int totalWaypointCount = 0;
     private boolean missionPausedForPhotoReview = false;
+
+    // Obstacle avoidance data
+    private boolean obstacleAvoidanceEnabled = false;
+    private float closestObstacleDistance = 0.0f;
+    private StringBuilder obstacleInfoBuilder = new StringBuilder();
 
     // Data classes for storing mission information
     private class InspectionPoint {
@@ -194,17 +218,31 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         init(context);
     }
 
-    // Variável para rastrear qual criança está sendo exibida no ViewFlipper
+    // Variable to track which child is being displayed in ViewFlipper
     private int currentViewFlipperChild = 0;
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
 
-        // Guardar qual tela estava sendo mostrada
+        Log.d(TAG, "Configuration changed to: " + (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait"));
+
+        // Save current view state
+        int mainViewFlipperState = 0;
+        int galleryViewFlipperState = 0;
+        int savedStructureId = currentStructureId;
+
         if (viewFlipper != null) {
-            currentViewFlipperChild = viewFlipper.getDisplayedChild();
+            mainViewFlipperState = viewFlipper.getDisplayedChild();
         }
+
+        if (galleryViewFlipper != null) {
+            galleryViewFlipperState = galleryViewFlipper.getDisplayedChild();
+        }
+
+        Log.d(TAG, "Saved states - mainView: " + mainViewFlipperState +
+                ", galleryView: " + galleryViewFlipperState +
+                ", structureId: " + savedStructureId);
 
         // Re-initialize layout based on new orientation
         if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) {
@@ -221,20 +259,33 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         findViews();
         setupListeners();
 
-        // Restaurar estado da galeria
+        // Restore gallery state
         initPhotoGallery();
 
-        // Restaurar qual tela estava sendo mostrada (missão ou galeria)
+        // Restore which screen was showing (mission or gallery)
         if (viewFlipper != null) {
-            viewFlipper.setDisplayedChild(currentViewFlipperChild);
+            viewFlipper.setDisplayedChild(mainViewFlipperState);
         }
 
-        // Atualizar outras informações de estado
+        // Restore gallery view state
+        if (mainViewFlipperState == 1 && galleryViewFlipper != null) {
+            if (galleryViewFlipperState == 0) {
+                // We were showing structure list
+                showStructuresList();
+            } else if (galleryViewFlipperState == 1 && savedStructureId > 0) {
+                // We were showing photos for a specific structure
+                showPhotosForStructure(savedStructureId);
+            }
+        }
+
+        // Update other state information
         updateConnectionStatus();
         updateViewsBasedOnState();
+
+        Log.d(TAG, "Configuration change completed");
     }
 
-    // Modificação do método init
+    // Modified init method
     private void init(Context context) {
         // Initialize UI components based on current orientation
         int orientation = getResources().getConfiguration().orientation;
@@ -244,7 +295,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             inflate(context, R.layout.view_structure_inspection_mission, this);
         }
 
-        // Importante: Inicializar o PhotoStorageManager antes de usá-lo
+        // Initialize the PhotoStorageManager before using it
         photoStorageManager = new PhotoStorageManager(context);
 
         // Find views and set up listeners
@@ -284,6 +335,14 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         btnBackToMission = findViewById(R.id.btn_back_to_mission);
         recyclerPhotos = findViewById(R.id.recycler_photos);
         noPhotosText = findViewById(R.id.text_no_photos);
+
+        // Gallery structure components
+        galleryViewFlipper = findViewById(R.id.gallery_view_flipper);
+        recyclerStructures = findViewById(R.id.recycler_structures);
+        noStructuresText = findViewById(R.id.text_no_structures);
+        btnBackToStructures = findViewById(R.id.btn_back_to_structures);
+        structureTitleText = findViewById(R.id.text_structure_title);
+        galleryTitleText = findViewById(R.id.text_gallery_title);
 
         // Connection status components
         connectionStatusText = findViewById(R.id.text_connection_status);
@@ -363,87 +422,199 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 }
             });
         }
+
+        if (btnBackToStructures != null) {
+            btnBackToStructures.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showStructuresList();
+                }
+            });
+        }
     }
 
     private void initPhotoGallery() {
+        Log.d(TAG, "Initializing photo gallery");
+
+        // Set up recycler view for structures
+        if (recyclerStructures != null) {
+            // Check if RecyclerView already has a LayoutManager
+            if (recyclerStructures.getLayoutManager() == null) {
+                int spanCount = getResources().getConfiguration().orientation ==
+                        Configuration.ORIENTATION_LANDSCAPE ? 3 : 2;
+                recyclerStructures.setLayoutManager(new GridLayoutManager(getContext(), spanCount));
+            }
+        }
+
         // Set up recycler view for photos
         if (recyclerPhotos != null) {
-            // Verificar se o RecyclerView já tem um LayoutManager
+            // Check if RecyclerView already has a LayoutManager
             if (recyclerPhotos.getLayoutManager() == null) {
                 int spanCount = getResources().getConfiguration().orientation ==
                         Configuration.ORIENTATION_LANDSCAPE ? 3 : 2;
                 recyclerPhotos.setLayoutManager(new GridLayoutManager(getContext(), spanCount));
             }
+        }
 
-            // Obter fotos salvas
-            photoStorageManager.refresh();
-            List<PhotoStorageManager.PhotoInfo> savedPhotos = photoStorageManager.getSavedPhotos();
+        // Inicializar os adaptadores
+        refreshGallery();
+    }
 
-            // Verificar se o adapter já existe e está ligado ao RecyclerView
-            if (recyclerPhotos.getAdapter() == null) {
-                if (photoGalleryAdapter == null) {
-                    photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), savedPhotos, this);
-                } else {
-                    photoGalleryAdapter.updatePhotoList(savedPhotos);
-                }
-                recyclerPhotos.setAdapter(photoGalleryAdapter);
+    private void refreshGallery() {
+        Log.d(TAG, "Refreshing gallery");
+
+        // Refresh photo storage
+        photoStorageManager.refresh();
+
+        // Obter estruturas com fotos
+        List<Integer> structureIds = photoStorageManager.getStructureIdsWithPhotos();
+        Log.d(TAG, "Found " + structureIds.size() + " structures with photos");
+
+        // Atualizar a visualização da lista de estruturas
+        if (recyclerStructures != null) {
+            if (structureFolderAdapter == null) {
+                structureFolderAdapter = new StructureFolderAdapter(
+                        getContext(),
+                        structureIds,
+                        photoStorageManager,
+                        new StructureFolderAdapter.OnStructureClickListener() {
+                            @Override
+                            public void onStructureClick(int structureId) {
+                                Log.d(TAG, "Structure clicked: " + structureId);
+                                showPhotosForStructure(structureId);
+                            }
+                        }
+                );
+                recyclerStructures.setAdapter(structureFolderAdapter);
             } else {
-                // Atualizar a lista de fotos do adapter existente
-                if (photoGalleryAdapter != null) {
-                    photoGalleryAdapter.updatePhotoList(savedPhotos);
-                    photoGalleryAdapter.notifyDataSetChanged();
-                }
+                structureFolderAdapter.updateStructureList(structureIds);
             }
+        }
 
-            // Atualizar visibilidade do texto "Nenhuma foto"
-            if (noPhotosText != null) {
-                noPhotosText.setVisibility(savedPhotos.isEmpty() ? View.VISIBLE : View.GONE);
-            }
+        // Atualizar a visibilidade do texto "Sem estruturas"
+        if (noStructuresText != null) {
+            noStructuresText.setVisibility(structureIds.isEmpty() ? View.VISIBLE : View.GONE);
+        }
+
+        // Se estiver visualizando uma estrutura específica, atualizar suas fotos
+        if (currentStructureId > 0 && galleryViewFlipper != null && galleryViewFlipper.getDisplayedChild() == 1) {
+            updatePhotosForCurrentStructure();
         }
     }
 
     // Methods for switching between mission and gallery views
-    // Methods for switching between mission and gallery views
     private void showGalleryView() {
+        Log.d(TAG, "Showing gallery view");
+
         if (viewFlipper != null) {
-            // Refresh photo list before showing gallery
-            photoStorageManager.refresh();
+            // Refresh gallery before showing
+            refreshGallery();
 
-            // Atualizar a lista de fotos e o adapter
-            List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getSavedPhotos();
-
-            if (photoGalleryAdapter != null) {
-                photoGalleryAdapter.updatePhotoList(photos);
-                photoGalleryAdapter.notifyDataSetChanged();
-            }
-
-            // Atualizar visibilidade do texto "Nenhuma foto"
-            if (noPhotosText != null) {
-                noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
-            }
-
-            // Mostrar a página da galeria
+            // Show gallery page
             viewFlipper.setDisplayedChild(1);
             currentViewFlipperChild = 1;
+
+            // Make sure we're showing the structures list first
+            if (galleryViewFlipper != null) {
+                galleryViewFlipper.setDisplayedChild(0);
+            }
+
+            // Update gallery title
+            if (galleryTitleText != null) {
+                galleryTitleText.setText("Galeria de Fotos por Estrutura");
+            }
         }
     }
 
     private void showMissionView() {
+        Log.d(TAG, "Showing mission view");
+
         if (viewFlipper != null) {
             viewFlipper.setDisplayedChild(0);
             currentViewFlipperChild = 0;
         }
     }
 
-    private void updatePhotoGallery() {
-        List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getSavedPhotos();
+    // Methods for structure-based photo browsing
+    private void showStructuresList() {
+        Log.d(TAG, "Showing structures list");
 
+        if (galleryViewFlipper != null) {
+            galleryViewFlipper.setDisplayedChild(0);
+            currentStructureId = -1;
+
+            // Update gallery title
+            if (galleryTitleText != null) {
+                galleryTitleText.setText("Galeria de Fotos por Estrutura");
+            }
+
+            // Atualize a lista de estruturas
+            if (structureFolderAdapter != null && recyclerStructures != null) {
+                List<Integer> structureIds = photoStorageManager.getStructureIdsWithPhotos();
+                structureFolderAdapter.updateStructureList(structureIds);
+
+                // Ensure correct adapter is set
+                recyclerStructures.setAdapter(structureFolderAdapter);
+
+                // Update "No structures" text visibility
+                if (noStructuresText != null) {
+                    noStructuresText.setVisibility(structureIds.isEmpty() ? View.VISIBLE : View.GONE);
+                }
+            }
+        }
+    }
+
+    private void showPhotosForStructure(int structureId) {
+        Log.d(TAG, "Showing photos for structure: " + structureId);
+
+        if (galleryViewFlipper != null) {
+            currentStructureId = structureId;
+
+            // Update structure title
+            if (structureTitleText != null) {
+                structureTitleText.setText("Estrutura " + structureId);
+            }
+
+            // Update photos for this structure
+            updatePhotosForCurrentStructure();
+
+            // Show photos view
+            galleryViewFlipper.setDisplayedChild(1);
+
+            // Update gallery title
+            if (galleryTitleText != null) {
+                galleryTitleText.setText("Fotos da Estrutura " + structureId);
+            }
+        }
+    }
+
+    private void updatePhotosForCurrentStructure() {
+        Log.d(TAG, "Updating photos for structure: " + currentStructureId);
+
+        if (currentStructureId <= 0) {
+            return;
+        }
+
+        // Get photos for this structure
+        List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getPhotosForStructure(currentStructureId);
+        Log.d(TAG, "Found " + photos.size() + " photos for structure: " + currentStructureId);
+
+        // Update no photos text visibility
         if (noPhotosText != null) {
             noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
         }
 
-        if (photoGalleryAdapter != null) {
-            photoGalleryAdapter.updatePhotoList(photos);
+        // Update photo adapter
+        if (recyclerPhotos != null) {
+            if (photoGalleryAdapter == null) {
+                photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), photos, this);
+                recyclerPhotos.setAdapter(photoGalleryAdapter);
+            } else {
+                photoGalleryAdapter.updatePhotoList(photos);
+
+                // Garantir que o adaptador correto esteja configurado
+                recyclerPhotos.setAdapter(photoGalleryAdapter);
+            }
         }
     }
 
@@ -554,6 +725,17 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             info.append("Estado da missão: ").append(state != null ? state.getName() : "Não iniciada").append("\n\n");
         }
 
+        // Add obstacle information
+        info.append("DETECÇÃO DE OBSTÁCULOS:\n");
+        info.append("Evitamento de obstáculos: ").append(obstacleAvoidanceEnabled ? "Ativado" : "Desativado").append("\n");
+        if (obstacleAvoidanceEnabled) {
+            info.append("Distância mais próxima: ").append(String.format("%.2f", closestObstacleDistance)).append("m\n");
+            if (obstacleInfoBuilder.length() > 0) {
+                info.append(obstacleInfoBuilder.toString()).append("\n");
+            }
+        }
+        info.append("\n");
+
         // Add current photo info if in mission
         if (currentInspectionIndex >= 0 && currentPhotoIndex >= 0 && !inspectionPoints.isEmpty() && !photoPoints.isEmpty()) {
             info.append("POSIÇÃO ATUAL:\n");
@@ -617,6 +799,20 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         flightController = aircraft.getFlightController();
         camera = aircraft.getCamera();
 
+        // Initialize FlightAssistant
+        if (flightController != null) {
+            flightAssistant = flightController.getFlightAssistant();
+            if (flightAssistant != null) {
+                // Enable obstacle avoidance features
+                enableObstacleAvoidance(true);
+                // Set up obstacle detection callback
+                setUpObstacleDetectionCallback();
+            } else {
+                Log.e(TAG, "FlightAssistant is null");
+                updateStatus("FlightAssistant não disponível");
+            }
+        }
+
         // Initialize the MediaManager correctly
         if (camera != null) {
             mediaManager = camera.getMediaManager();
@@ -676,6 +872,119 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
         waypointMissionOperator = MissionControl.getInstance().getWaypointMissionOperator();
         setUpListener();
+    }
+
+    /**
+     * Enable obstacle avoidance features
+     * @param enable true to enable, false to disable
+     */
+    private void enableObstacleAvoidance(final boolean enable) {
+        if (flightAssistant == null) {
+            Log.e(TAG, "FlightAssistant is null, cannot enable obstacle avoidance");
+            return;
+        }
+
+        // Enable collision avoidance
+        flightAssistant.setCollisionAvoidanceEnabled(enable, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    Log.d(TAG, "Collision avoidance " + (enable ? "enabled" : "disabled"));
+                } else {
+                    Log.e(TAG, "Failed to set collision avoidance: " + djiError.getDescription());
+                }
+            }
+        });
+
+        // Enable upward vision obstacle avoidance
+        flightAssistant.setUpwardVisionObstacleAvoidanceEnabled(enable, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    Log.d(TAG, "Upward vision obstacle avoidance " + (enable ? "enabled" : "disabled"));
+                } else {
+                    Log.e(TAG, "Failed to set upward vision obstacle avoidance: " + djiError.getDescription());
+                }
+            }
+        });
+
+        // Enable horizontal obstacle avoidance during RTH
+        flightAssistant.setRTHObstacleAvoidanceEnabled(enable, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    Log.d(TAG, "RTH obstacle avoidance " + (enable ? "enabled" : "disabled"));
+                } else {
+                    Log.e(TAG, "Failed to set RTH obstacle avoidance: " + djiError.getDescription());
+                }
+            }
+        });
+
+        // Enable landing protection
+        flightAssistant.setLandingProtectionEnabled(enable, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    Log.d(TAG, "Landing protection " + (enable ? "enabled" : "disabled"));
+                } else {
+                    Log.e(TAG, "Failed to set landing protection: " + djiError.getDescription());
+                }
+            }
+        });
+
+        // Update obstacle avoidance state for UI
+        obstacleAvoidanceEnabled = enable;
+        updateAdvancedMissionInfo();
+    }
+
+    /**
+     * Set up obstacle detection callback to receive obstacle information
+     */
+    private void setUpObstacleDetectionCallback() {
+        if (flightAssistant == null) return;
+
+        flightAssistant.setVisionDetectionStateUpdatedCallback(new VisionDetectionState.Callback() {
+            @Override
+            public void onUpdate(@NonNull VisionDetectionState visionDetectionState) {
+                // Get obstacle detection sectors
+                ObstacleDetectionSector[] sectors = visionDetectionState.getDetectionSectors();
+
+                // Reset obstacle information
+                obstacleInfoBuilder = new StringBuilder();
+                closestObstacleDistance = Float.MAX_VALUE;
+
+                // Process each sector
+                for (int i = 0; i < sectors.length; i++) {
+                    ObstacleDetectionSector sector = sectors[i];
+                    float distance = sector.getObstacleDistanceInMeters();
+
+                    // Track closest obstacle
+                    if (distance < closestObstacleDistance && distance > 0) {
+                        closestObstacleDistance = distance;
+                    }
+
+                    // Add warning for close obstacles
+                    if (distance < 10 && distance > 0) {
+                        obstacleInfoBuilder.append("Setor ").append(i + 1)
+                                .append(": ").append(String.format("%.2f", distance))
+                                .append("m (Perigo: ").append(sector.getWarningLevel().name())
+                                .append(")\n");
+                    }
+                }
+
+                // Update system warning
+                obstacleInfoBuilder.append("Alerta do sistema: ")
+                        .append(visionDetectionState.getSystemWarning().name());
+
+                // Update UI
+                post(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateAdvancedMissionInfo();
+                    }
+                });
+            }
+        });
     }
 
     // Method to be called when product connects (from MainActivity)
@@ -742,6 +1051,10 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     @Override
     protected void onDetachedFromWindow() {
         tearDownListener();
+
+        if (flightAssistant != null) {
+            flightAssistant.setVisionDetectionStateUpdatedCallback(null);
+        }
 
         if (flightController != null) {
             flightController.setStateCallback(null);
@@ -941,6 +1254,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         isMissionPaused = false;
         missionPausedForPhotoReview = false;
 
+        // Enable obstacle avoidance before starting mission
+        enableObstacleAvoidance(true);
+
         // Create complete mission with all inspection points and their photos
         createCompleteMission();
     }
@@ -1035,6 +1351,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 (WaypointMissionState.READY_TO_UPLOAD.equals(waypointMissionOperator.getCurrentState()) ||
                         WaypointMissionState.READY_TO_RETRY_UPLOAD.equals(waypointMissionOperator.getCurrentState()))) {
 
+            // Make sure obstacle avoidance is enabled
+            enableObstacleAvoidance(true);
+
             waypointMissionOperator.uploadMission(new CommonCallbacks.CompletionCallback() {
                 @Override
                 public void onResult(final DJIError djiError) {
@@ -1120,6 +1439,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
     private void resumeMission() {
         if (waypointMissionOperator != null) {
+            // Make sure obstacle avoidance is enabled before resuming
+            enableObstacleAvoidance(true);
+
             waypointMissionOperator.resumeMission(new CommonCallbacks.CompletionCallback() {
                 @Override
                 public void onResult(final DJIError djiError) {
@@ -1167,6 +1489,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                         public void run() {
                             if (djiError == null) {
                                 updateStatus("Missão encerrada, retornando para posição inicial...");
+
+                                // Make sure obstacle avoidance is enabled for return home
+                                enableObstacleAvoidance(true);
 
                                 // Create a return to home mission
                                 createReturnToHomeMission();
@@ -1356,6 +1681,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             @Override
             public void onExecutionStart() {
                 updateStatus("Execução da missão iniciada");
+
+                // Make sure obstacle avoidance is enabled
+                enableObstacleAvoidance(true);
             }
 
             @Override
@@ -1732,11 +2060,17 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                     photoStorageManager.savePhoto(photo, currentInspectionIndex + 1, currentPhotoIndex + 1);
 
             if (savedPhoto != null) {
-                updateStatus("Foto salva em: " + savedPhoto.getFilename());
+                updateStatus("Foto salva em: " + savedPhoto.getFile().getAbsolutePath());
 
                 // Update photo gallery if visible
                 if (viewFlipper != null && viewFlipper.getDisplayedChild() == 1) {
-                    updatePhotoGallery();
+                    refreshGallery();
+
+                    // If we're viewing the current structure, update its photos
+                    if (galleryViewFlipper != null && galleryViewFlipper.getDisplayedChild() == 1 &&
+                            currentStructureId == currentInspectionIndex + 1) {
+                        updatePhotosForCurrentStructure();
+                    }
                 }
             } else {
                 updateStatus("Erro ao salvar foto");
@@ -1759,6 +2093,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
     @Override
     public void onDeleteClick(PhotoStorageManager.PhotoInfo photoInfo) {
+        Log.d(TAG, "Delete photo clicked: " + photoInfo.getFilename());
+
         // Confirm before deletion
         new AlertDialog.Builder(getContext())
                 .setTitle("Confirmar Exclusão")
@@ -1767,7 +2103,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                     // Delete the photo
                     if (photoStorageManager.deletePhoto(photoInfo)) {
                         updateStatus("Foto excluída com sucesso");
-                        updatePhotoGallery();
+                        refreshGallery();
                     } else {
                         updateStatus("Erro ao excluir foto");
                     }
@@ -1815,7 +2151,6 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         dialog.show();
     }
 
-    // Method to share photo with other apps
     // Method to share photo with other apps - Versão ultra-compatível
     private void sharePhoto(PhotoStorageManager.PhotoInfo photoInfo) {
         if (photoInfo == null || !photoInfo.getFile().exists()) {
