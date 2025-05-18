@@ -188,9 +188,17 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         init(context);
     }
 
+    // Variável para rastrear qual criança está sendo exibida no ViewFlipper
+    private int currentViewFlipperChild = 0;
+
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+
+        // Guardar qual tela estava sendo mostrada
+        if (viewFlipper != null) {
+            currentViewFlipperChild = viewFlipper.getDisplayedChild();
+        }
 
         // Re-initialize layout based on new orientation
         if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) {
@@ -207,11 +215,20 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         findViews();
         setupListeners();
 
-        // Restore current state
+        // Restaurar estado da galeria
+        initPhotoGallery();
+
+        // Restaurar qual tela estava sendo mostrada (missão ou galeria)
+        if (viewFlipper != null) {
+            viewFlipper.setDisplayedChild(currentViewFlipperChild);
+        }
+
+        // Atualizar outras informações de estado
         updateConnectionStatus();
         updateViewsBasedOnState();
     }
 
+    // Modificação do método init
     private void init(Context context) {
         // Initialize UI components based on current orientation
         int orientation = getResources().getConfiguration().orientation;
@@ -221,7 +238,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             inflate(context, R.layout.view_structure_inspection_mission, this);
         }
 
-        // Initialize PhotoStorageManager
+        // Importante: Inicializar o PhotoStorageManager antes de usá-lo
         photoStorageManager = new PhotoStorageManager(context);
 
         // Find views and set up listeners
@@ -345,14 +362,34 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private void initPhotoGallery() {
         // Set up recycler view for photos
         if (recyclerPhotos != null) {
-            recyclerPhotos.setLayoutManager(new GridLayoutManager(getContext(), 2));
+            // Verificar se o RecyclerView já tem um LayoutManager
+            if (recyclerPhotos.getLayoutManager() == null) {
+                int spanCount = getResources().getConfiguration().orientation ==
+                        Configuration.ORIENTATION_LANDSCAPE ? 3 : 2;
+                recyclerPhotos.setLayoutManager(new GridLayoutManager(getContext(), spanCount));
+            }
 
-            // Initialize adapter with empty list
+            // Obter fotos salvas
+            photoStorageManager.refresh();
             List<PhotoStorageManager.PhotoInfo> savedPhotos = photoStorageManager.getSavedPhotos();
-            photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), savedPhotos, this);
-            recyclerPhotos.setAdapter(photoGalleryAdapter);
 
-            // Show/hide no photos text
+            // Verificar se o adapter já existe e está ligado ao RecyclerView
+            if (recyclerPhotos.getAdapter() == null) {
+                if (photoGalleryAdapter == null) {
+                    photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), savedPhotos, this);
+                } else {
+                    photoGalleryAdapter.updatePhotoList(savedPhotos);
+                }
+                recyclerPhotos.setAdapter(photoGalleryAdapter);
+            } else {
+                // Atualizar a lista de fotos do adapter existente
+                if (photoGalleryAdapter != null) {
+                    photoGalleryAdapter.updatePhotoList(savedPhotos);
+                    photoGalleryAdapter.notifyDataSetChanged();
+                }
+            }
+
+            // Atualizar visibilidade do texto "Nenhuma foto"
             if (noPhotosText != null) {
                 noPhotosText.setVisibility(savedPhotos.isEmpty() ? View.VISIBLE : View.GONE);
             }
@@ -360,19 +397,35 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     }
 
     // Methods for switching between mission and gallery views
+    // Methods for switching between mission and gallery views
     private void showGalleryView() {
         if (viewFlipper != null) {
             // Refresh photo list before showing gallery
             photoStorageManager.refresh();
-            updatePhotoGallery();
 
-            viewFlipper.setDisplayedChild(1); // Gallery view index
+            // Atualizar a lista de fotos e o adapter
+            List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getSavedPhotos();
+
+            if (photoGalleryAdapter != null) {
+                photoGalleryAdapter.updatePhotoList(photos);
+                photoGalleryAdapter.notifyDataSetChanged();
+            }
+
+            // Atualizar visibilidade do texto "Nenhuma foto"
+            if (noPhotosText != null) {
+                noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
+            }
+
+            // Mostrar a página da galeria
+            viewFlipper.setDisplayedChild(1);
+            currentViewFlipperChild = 1;
         }
     }
 
     private void showMissionView() {
         if (viewFlipper != null) {
-            viewFlipper.setDisplayedChild(0); // Mission view index
+            viewFlipper.setDisplayedChild(0);
+            currentViewFlipperChild = 0;
         }
     }
 
