@@ -238,16 +238,6 @@
                     android:text="Encerrar" />
             </LinearLayout>
 
-            <!-- Manual Photo Controls -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
-                android:orientation="horizontal">
-
-
-            </LinearLayout>
-
             <!-- Current Mission Progress -->
             <LinearLayout
                 android:layout_width="match_parent"
@@ -312,7 +302,7 @@
 
         </LinearLayout>
 
-        <!-- Tela de galeria de fotos -->
+        <!-- Tela de galeria de fotos - Modificada para ViewFlipper entre estruturas e fotos -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -325,6 +315,7 @@
                 android:layout_marginBottom="12dp">
 
                 <TextView
+                    android:id="@+id/text_gallery_title"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
@@ -342,22 +333,84 @@
                     android:text="Voltar à Missão" />
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/text_no_photos"
+            <!-- ViewFlipper para alternar entre lista de estruturas e fotos de uma estrutura -->
+            <ViewFlipper
+                android:id="@+id/gallery_view_flipper"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Nenhuma foto salva ainda"
-                android:textColor="#4B5563"
-                android:textSize="16sp"
-                android:gravity="center"
-                android:layout_marginTop="32dp"
-                android:visibility="gone" />
+                android:layout_height="match_parent">
 
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/recycler_photos"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:layout_marginBottom="8dp" />
+                <!-- Tela de lista de estruturas -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/text_no_structures"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Nenhuma estrutura com fotos"
+                        android:textColor="#4B5563"
+                        android:textSize="16sp"
+                        android:gravity="center"
+                        android:layout_marginTop="32dp"
+                        android:visibility="gone" />
+
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/recycler_structures"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+                </LinearLayout>
+
+                <!-- Tela de fotos de uma estrutura específica -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="12dp">
+
+                        <Button
+                            android:id="@+id/btn_back_to_structures"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:background="@drawable/button_bg"
+                            android:textColor="#FFFFFF"
+                            android:text="← Voltar às Estruturas"
+                            android:layout_marginEnd="12dp" />
+
+                        <TextView
+                            android:id="@+id/text_structure_title"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Estrutura 1"
+                            android:textSize="16sp"
+                            android:textColor="#1E3A8A"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/text_no_photos"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Nenhuma foto nesta estrutura"
+                        android:textColor="#4B5563"
+                        android:textSize="16sp"
+                        android:gravity="center"
+                        android:layout_marginTop="32dp"
+                        android:visibility="gone" />
+
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/recycler_photos"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+                </LinearLayout>
+            </ViewFlipper>
         </LinearLayout>
     </ViewFlipper>
 </LinearLayout>
