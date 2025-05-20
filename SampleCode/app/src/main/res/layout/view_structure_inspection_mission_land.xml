@@ -71,6 +71,20 @@
                 android:textSize="12sp" />
 
             <Button
+                android:id="@+id/btn_live_stream"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/button_bg"
+                android:textColor="#FFFFFF"
+                android:drawableStart="@drawable/ic_live_stream"
+                android:drawablePadding="4dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="Ao Vivo"
+                android:textSize="12sp" />
+
+            <Button
                 android:id="@+id/btn_toggle_gallery"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
@@ -380,4 +394,10 @@
             </ViewFlipper>
         </LinearLayout>
     </ViewFlipper>
+    <!-- Container para visualização de live stream (adicionado no final) -->
+    <FrameLayout
+        android:id="@+id/live_stream_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 </LinearLayout>

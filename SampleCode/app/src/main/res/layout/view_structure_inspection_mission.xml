@@ -29,14 +29,19 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal">
 
+            <!-- Novo botão de live stream -->
             <Button
-                android:id="@+id/btn_review_photo"
+                android:id="@+id/btn_live_stream"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
                 android:layout_marginEnd="8dp"
-                android:background="@drawable/button_bg_photo"
+                android:background="@drawable/button_bg"
                 android:textColor="#FFFFFF"
-                android:text="Foto Debug" />
+                android:drawableStart="@drawable/ic_live_stream"
+                android:drawablePadding="4dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="Ao Vivo" />
 
             <Button
                 android:id="@+id/btn_toggle_gallery"
@@ -300,6 +305,15 @@
                 android:text="Status: Pronto para iniciar missão"
                 android:elevation="3dp" />
 
+            <Button
+                android:id="@+id/btn_review_photo"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/button_bg_photo"
+                android:text="Foto Debug"
+                android:textColor="#FFFFFF" />
+
         </LinearLayout>
 
         <!-- Tela de galeria de fotos - Modificada para ViewFlipper entre estruturas e fotos -->
@@ -413,4 +427,11 @@
             </ViewFlipper>
         </LinearLayout>
     </ViewFlipper>
+
+    <!-- Container para visualização de live stream (adicionado no final) -->
+    <FrameLayout
+        android:id="@+id/live_stream_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 </LinearLayout>

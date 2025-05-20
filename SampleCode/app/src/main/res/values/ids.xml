@@ -9,4 +9,8 @@
     <item name="text_mission_info" type="id" />
     <item name="text_csv_info" type="id" />
     <item name="tv_fc_push_info" type="id" />
+    <item name="btn_live_stream" type="id" />
+    <item name="live_stream_container" type="id" />
+    <item name="text_advanced_mission_info" type="id" />
+
 </resources>

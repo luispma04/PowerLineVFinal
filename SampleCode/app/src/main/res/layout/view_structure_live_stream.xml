@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F5F7FA"
+    android:padding="16dp">
+
+    <!-- Cabeçalho com título e botão para fechar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Transmissão ao Vivo"
+            android:textSize="20sp"
+            android:textColor="#1E3A8A"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btn_close_live_stream"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/button_bg_circle"
+            android:textColor="#FFFFFF"
+            android:text="X" />
+    </LinearLayout>
+
+    <!-- Status da transmissão -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/rounded_card_bg"
+        android:padding="12dp"
+        android:layout_marginBottom="12dp"
+        android:elevation="2dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Status:"
+                android:textStyle="bold"
+                android:textColor="#1E3A8A" />
+
+            <TextView
+                android:id="@+id/text_stream_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Conectando..."
+                android:layout_marginStart="8dp"
+                android:textColor="#4B5563" />
+
+            <TextView
+                android:id="@+id/text_stream_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="00:00:00"
+                android:layout_marginStart="16dp"
+                android:textColor="#4B5563" />
+        </LinearLayout>
+
+        <!-- Informações de qualidade -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Qualidade:"
+                android:textStyle="bold"
+                android:textColor="#1E3A8A" />
+
+            <TextView
+                android:id="@+id/text_stream_quality"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="HD 2048kbps"
+                android:layout_marginStart="8dp"
+                android:textColor="#4B5563" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Feed principal de vídeo - com proporção 16:9 real garantida -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.5"
+        android:background="@drawable/video_feed_background"
+        android:layout_marginBottom="12dp"
+        android:elevation="2dp">
+
+        <com.dji.sdk.sample.internal.utils.VideoFeedView
+            android:id="@+id/video_view_primary_video_feed"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Indicador de ao vivo -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:layout_margin="12dp"
+            android:background="#80DC2626"
+            android:paddingStart="8dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="4dp"
+            android:text="AO VIVO"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <!-- URL (oculto, mas mantido para funcionalidade) -->
+        <EditText
+            android:id="@+id/edit_live_show_url_input"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- Espaçador entre vídeo e controles -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:background="@drawable/rounded_card_bg"
+        android:elevation="2dp"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="Controles"
+            android:textColor="#1E3A8A"
+            android:textStyle="bold" />
+
+        <!-- Botão de mudo com texto -->
+        <ToggleButton
+            android:id="@+id/toggle_sound"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:background="@drawable/button_bg"
+            android:drawableStart="@drawable/toggle_sound_icon"
+            android:paddingStart="16dp"
+            android:textColor="#FFFFFF"
+            android:textOff="Ativar Áudio"
+            android:textOn="Silenciar Áudio" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.3" />
+
+    <!-- Controles da transmissão - Botão de áudio com texto -->
+
+    <FrameLayout
+        android:id="@+id/live_stream_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+</LinearLayout>

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#F5F7FA"
+    android:baselineAligned="false">
+
+    <!-- Feed principal de vídeo - simplified -->
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="2"
+        android:background="@drawable/video_feed_background"
+        android:layout_marginEnd="4dp">
+
+        <com.dji.sdk.sample.internal.utils.VideoFeedView
+            android:id="@+id/video_view_primary_video_feed"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Indicador de ao vivo -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:layout_margin="8dp"
+            android:background="#80DC2626"
+            android:padding="4dp"
+            android:text="AO VIVO"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <!-- URL (oculto, mas mantido para funcionalidade) -->
+        <EditText
+            android:id="@+id/edit_live_show_url_input"
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- Painel lateral de controle - simplified -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <!-- Cabeçalho com título e botão para fechar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Transmissão"
+                android:textSize="14sp"
+                android:textColor="#1E3A8A"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btn_close_live_stream"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="@drawable/button_bg_circle"
+                android:textColor="#FFFFFF"
+                android:text="X" />
+        </LinearLayout>
+
+        <!-- Status da transmissão -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/rounded_card_bg"
+            android:padding="8dp"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:id="@+id/text_stream_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Conectando..."
+                android:textColor="#4B5563" />
+
+            <TextView
+                android:id="@+id/text_stream_info"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="00:00:00"
+                android:layout_marginTop="4dp"
+                android:textColor="#4B5563" />
+
+            <TextView
+                android:id="@+id/text_stream_quality"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="HD 2048kbps"
+                android:layout_marginTop="4dp"
+                android:textColor="#4B5563" />
+        </LinearLayout>
+
+        <!-- Controles da transmissão -->
+        <ToggleButton
+            android:id="@+id/toggle_sound"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/button_bg"
+            android:textColor="#FFFFFF"
+            android:textOn="Silenciar Áudio"
+            android:textOff="Ativar Áudio"
+            android:padding="8dp" />
+    </LinearLayout>
+    <FrameLayout
+        android:id="@+id/live_stream_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+</LinearLayout>

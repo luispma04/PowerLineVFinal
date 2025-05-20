@@ -1,27 +1,33 @@
 package com.dji.sdk.sample.demo.missionoperator;
 
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.Log;
 import android.view.LayoutInflater;
+import android.view.Surface;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CompoundButton;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.ToggleButton;
 import android.widget.ViewFlipper;
-import android.widget.ProgressBar;
 
 import com.dji.sdk.sample.R;
 import com.dji.sdk.sample.demo.missionmanager.MissionBaseView;
@@ -31,20 +37,18 @@ import com.dji.sdk.sample.demo.missionoperator.util.PhotoStorageManager;
 import com.dji.sdk.sample.internal.controller.DJISampleApplication;
 import com.dji.sdk.sample.internal.utils.ToastUtils;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import android.os.Environment;
-
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.OutputStream;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -68,6 +72,7 @@ import dji.common.mission.waypoint.WaypointMissionHeadingMode;
 import dji.common.mission.waypoint.WaypointMissionState;
 import dji.common.mission.waypoint.WaypointMissionUploadEvent;
 import dji.common.util.CommonCallbacks;
+import dji.sdk.base.BaseProduct;
 import dji.sdk.camera.Camera;
 import dji.sdk.flightcontroller.FlightAssistant;
 import dji.sdk.flightcontroller.FlightController;
@@ -80,7 +85,6 @@ import dji.sdk.mission.MissionControl;
 import dji.sdk.mission.waypoint.WaypointMissionOperator;
 import dji.sdk.mission.waypoint.WaypointMissionOperatorListener;
 import dji.sdk.products.Aircraft;
-import dji.sdk.base.BaseProduct;
 
 public class StructureInspectionMissionView extends MissionBaseView implements PhotoGalleryAdapter.OnPhotoClickListener {
 
@@ -123,6 +127,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private Button btnBackToMission;
     private RecyclerView recyclerPhotos;
     private TextView noPhotosText;
+    private Button btnLiveStream;
+    private FrameLayout liveStreamContainer;
+    private StructureLiveStreamView liveStreamView;
 
     // Gallery structure components
     private ViewFlipper galleryViewFlipper;
@@ -178,6 +185,14 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private float closestObstacleDistance = 0.0f;
     private StringBuilder obstacleInfoBuilder = new StringBuilder();
 
+    // Flag para rastrear se a visualização de live stream está ativa
+    private boolean isLiveStreamActive = false;
+    private Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    // For orientation locking
+    private int originalOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+    private boolean orientationLocked = false;
+
     // Data classes for storing mission information
     private class InspectionPoint {
         double latitude;
@@ -227,63 +242,84 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
         Log.d(TAG, "Configuration changed to: " + (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait"));
 
-        // Save current view state
-        int mainViewFlipperState = 0;
-        int galleryViewFlipperState = 0;
-        int savedStructureId = currentStructureId;
+        try {
+            // CRITICAL: Save ALL states BEFORE modifying any views
+            boolean wasLiveStreamActive = isLiveStreamActive;
+            int mainViewFlipperState = 0;
+            int galleryViewFlipperState = 0;
+            int savedStructureId = currentStructureId;
 
-        if (viewFlipper != null) {
-            mainViewFlipperState = viewFlipper.getDisplayedChild();
-        }
-
-        if (galleryViewFlipper != null) {
-            galleryViewFlipperState = galleryViewFlipper.getDisplayedChild();
-        }
-
-        Log.d(TAG, "Saved states - mainView: " + mainViewFlipperState +
-                ", galleryView: " + galleryViewFlipperState +
-                ", structureId: " + savedStructureId);
-
-        // Re-initialize layout based on new orientation
-        if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            // Inflate landscape layout
-            removeAllViews();
-            inflate(getContext(), R.layout.view_structure_inspection_mission_land, this);
-        } else {
-            // Inflate portrait layout
-            removeAllViews();
-            inflate(getContext(), R.layout.view_structure_inspection_mission, this);
-        }
-
-        // Re-initialize all views
-        findViews();
-        setupListeners();
-
-        // Restore gallery state
-        initPhotoGallery();
-
-        // Restore which screen was showing (mission or gallery)
-        if (viewFlipper != null) {
-            viewFlipper.setDisplayedChild(mainViewFlipperState);
-        }
-
-        // Restore gallery view state
-        if (mainViewFlipperState == 1 && galleryViewFlipper != null) {
-            if (galleryViewFlipperState == 0) {
-                // We were showing structure list
-                showStructuresList();
-            } else if (galleryViewFlipperState == 1 && savedStructureId > 0) {
-                // We were showing photos for a specific structure
-                showPhotosForStructure(savedStructureId);
+            if (viewFlipper != null) {
+                mainViewFlipperState = viewFlipper.getDisplayedChild();
             }
+
+            if (galleryViewFlipper != null) {
+                galleryViewFlipperState = galleryViewFlipper.getDisplayedChild();
+            }
+
+            // First handle live stream state
+            if (liveStreamContainer != null && liveStreamView != null) {
+                liveStreamView.cleanup();
+                liveStreamContainer.removeAllViews();
+                liveStreamView = null;
+            }
+
+            // Re-initialize layout
+            removeAllViews();
+            if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                inflate(getContext(), R.layout.view_structure_inspection_mission_land, this);
+            } else {
+                inflate(getContext(), R.layout.view_structure_inspection_mission, this);
+            }
+
+            // Re-initialize views
+            findViews();
+            setupListeners();
+
+            // IMPORTANT: Always refresh the photo storage manager here
+            // This ensures gallery data is always current
+            if (photoStorageManager != null) {
+                photoStorageManager.refresh();
+            }
+
+            // Initialize gallery components but don't load data yet
+            initPhotoGallery();
+
+            // Update states and connection
+            updateConnectionStatus();
+            updateViewsBasedOnState();
+
+            // IMPORTANT: First restore normal main view state (mission vs gallery)
+            if (viewFlipper != null) {
+                viewFlipper.setDisplayedChild(mainViewFlipperState);
+            }
+
+            // IMPORTANT: Now handle gallery state and populate data if needed
+            if (mainViewFlipperState == 1 && galleryViewFlipper != null) {
+                // We're in gallery view, so refresh gallery data completely
+                refreshGallery();
+
+                if (galleryViewFlipperState == 0) {
+                    // We were in structures list
+                    showStructuresList();
+                } else if (galleryViewFlipperState == 1 && savedStructureId > 0) {
+                    // We were viewing photos for a specific structure
+                    showPhotosForStructure(savedStructureId);
+                }
+            }
+
+            // LAST: Restore live stream if it was active
+            if (wasLiveStreamActive) {
+                new Handler().postDelayed(() -> {
+                    showLiveStreamView();
+                }, 300);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error during configuration change", e);
+            updateStatus("Erro durante rotação do dispositivo: " + e.getMessage());
         }
-
-        // Update other state information
-        updateConnectionStatus();
-        updateViewsBasedOnState();
-
-        Log.d(TAG, "Configuration change completed");
     }
+
 
     // Modified init method
     private void init(Context context) {
@@ -355,6 +391,10 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         btnStartMission.setEnabled(false);
         btnPause.setEnabled(false);
         btnStopMission.setEnabled(false);
+
+        //livestream
+        btnLiveStream = findViewById(R.id.btn_live_stream);
+        liveStreamContainer = findViewById(R.id.live_stream_container);
     }
 
     private void setupListeners() {
@@ -431,6 +471,170 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 }
             });
         }
+
+        if (btnLiveStream != null) {
+            // Remove any existing listeners to prevent duplicates
+            btnLiveStream.setOnClickListener(null);
+
+            // Add new listener with better debug info
+            btnLiveStream.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Log.d(TAG, "Live stream button clicked - orientation: " +
+                            (getResources().getConfiguration().orientation ==
+                                    Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait"));
+                    showLiveStreamView();
+                }
+            });
+
+            // Ensure the button is visible and enabled
+            btnLiveStream.setVisibility(View.VISIBLE);
+            btnLiveStream.setEnabled(true);
+        } else {
+            Log.e(TAG, "Live stream button not found in current layout");
+        }
+    }
+
+    private void showLiveStreamView() {
+        Log.d(TAG, "showLiveStreamView called");
+
+        if (liveStreamContainer == null) {
+            Log.e(TAG, "Error: Live stream container is null");
+            // Try to find it again if null
+            liveStreamContainer = findViewById(R.id.live_stream_container);
+            if (liveStreamContainer == null) {
+                updateStatus("Erro: Container de livestream não encontrado");
+                return;
+            }
+        }
+
+        try {
+            // Clean up existing view
+            if (liveStreamView != null) {
+                liveStreamView.cleanup();
+            }
+            liveStreamContainer.removeAllViews();
+
+            // Create a new live stream view with the proper orientation context
+            liveStreamView = new StructureLiveStreamView(getContext());
+
+            // IMPORTANT: Set close listener BEFORE adding to container
+            liveStreamView.setOnCloseListener(new StructureLiveStreamView.OnCloseListener() {
+                @Override
+                public void onClose() {
+                    Log.d(TAG, "Close listener triggered");
+                    hideLiveStreamView();
+                }
+            });
+
+            // Add view to container
+            liveStreamContainer.addView(liveStreamView);
+
+            // Make container visible
+            liveStreamContainer.setVisibility(View.VISIBLE);
+
+            // Update state flag
+            isLiveStreamActive = true;
+
+            // Lock orientation AFTER UI is visible and working
+            lockCurrentOrientation();
+
+            Log.d(TAG, "Live stream view successfully shown");
+        } catch (Exception e) {
+            Log.e(TAG, "Error showing live stream view", e);
+            updateStatus("Erro ao mostrar livestream: " + e.getMessage());
+
+            // Reset state
+            isLiveStreamActive = false;
+            unlockOrientation();
+
+            if (liveStreamContainer != null) {
+                liveStreamContainer.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    public void hideLiveStreamView() {
+        Log.d(TAG, "hideLiveStreamView called");
+
+        try {
+            // Reset state flag
+            isLiveStreamActive = false;
+
+            // Unlock orientation
+            unlockOrientation();
+
+            // Hide and clean container
+            if (liveStreamContainer != null) {
+                liveStreamContainer.setVisibility(View.GONE);
+                liveStreamContainer.removeAllViews();
+            }
+
+            // Clean up view
+            if (liveStreamView != null) {
+                liveStreamView.cleanup();
+                liveStreamView = null;
+            }
+
+            Log.d(TAG, "Live stream view hidden successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Error hiding live stream view", e);
+        }
+    }
+
+    // Add methods to lock and unlock orientation
+    private void lockCurrentOrientation() {
+        try {
+            if (getContext() instanceof Activity) {
+                Activity activity = (Activity) getContext();
+
+                // Save current orientation
+                originalOrientation = activity.getRequestedOrientation();
+
+                // Get current rotation
+                int currentRotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+
+                // Lock to current orientation
+                switch (currentRotation) {
+                    case Surface.ROTATION_0:
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                        break;
+                    case Surface.ROTATION_90:
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                        break;
+                    case Surface.ROTATION_180:
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
+                        break;
+                    case Surface.ROTATION_270:
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+                        break;
+                    default:
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                        break;
+                }
+
+                orientationLocked = true;
+                Log.d(TAG, "Orientation locked");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error locking orientation", e);
+        }
+    }
+
+    private void unlockOrientation() {
+        try {
+            if (orientationLocked && getContext() instanceof Activity) {
+                Activity activity = (Activity) getContext();
+
+                // Restore original orientation
+                activity.setRequestedOrientation(originalOrientation);
+
+                orientationLocked = false;
+                Log.d(TAG, "Orientation unlocked");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error unlocking orientation", e);
+        }
     }
 
     private void initPhotoGallery() {
@@ -463,42 +667,55 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private void refreshGallery() {
         Log.d(TAG, "Refreshing gallery");
 
-        // Refresh photo storage
-        photoStorageManager.refresh();
+        try {
+            // Refresh photo storage data
+            if (photoStorageManager != null) {
+                photoStorageManager.refresh();
 
-        // Obter estruturas com fotos
-        List<Integer> structureIds = photoStorageManager.getStructureIdsWithPhotos();
-        Log.d(TAG, "Found " + structureIds.size() + " structures with photos");
+                // Get structures with photos
+                List<Integer> structureIds = photoStorageManager.getStructureIdsWithPhotos();
+                Log.d(TAG, "Found " + structureIds.size() + " structures with photos");
 
-        // Atualizar a visualização da lista de estruturas
-        if (recyclerStructures != null) {
-            if (structureFolderAdapter == null) {
-                structureFolderAdapter = new StructureFolderAdapter(
-                        getContext(),
-                        structureIds,
-                        photoStorageManager,
-                        new StructureFolderAdapter.OnStructureClickListener() {
-                            @Override
-                            public void onStructureClick(int structureId) {
-                                Log.d(TAG, "Structure clicked: " + structureId);
-                                showPhotosForStructure(structureId);
-                            }
+                // Update structures list view
+                if (recyclerStructures != null) {
+                    if (structureFolderAdapter == null) {
+                        structureFolderAdapter = new StructureFolderAdapter(
+                                getContext(),
+                                structureIds,
+                                photoStorageManager,
+                                new StructureFolderAdapter.OnStructureClickListener() {
+                                    @Override
+                                    public void onStructureClick(int structureId) {
+                                        Log.d(TAG, "Structure clicked: " + structureId);
+                                        showPhotosForStructure(structureId);
+                                    }
+                                }
+                        );
+                        recyclerStructures.setAdapter(structureFolderAdapter);
+                    } else {
+                        structureFolderAdapter.updateStructureList(structureIds);
+                        // Ensure adapter is set
+                        if (recyclerStructures.getAdapter() != structureFolderAdapter) {
+                            recyclerStructures.setAdapter(structureFolderAdapter);
                         }
-                );
-                recyclerStructures.setAdapter(structureFolderAdapter);
+                    }
+                }
+
+                // Update "no structures" text visibility
+                if (noStructuresText != null) {
+                    noStructuresText.setVisibility(structureIds.isEmpty() ? View.VISIBLE : View.GONE);
+                }
+
+                // If viewing a specific structure, update photos
+                if (currentStructureId > 0 && galleryViewFlipper != null &&
+                        galleryViewFlipper.getDisplayedChild() == 1) {
+                    updatePhotosForCurrentStructure();
+                }
             } else {
-                structureFolderAdapter.updateStructureList(structureIds);
+                Log.e(TAG, "photoStorageManager is null in refreshGallery");
             }
-        }
-
-        // Atualizar a visibilidade do texto "Sem estruturas"
-        if (noStructuresText != null) {
-            noStructuresText.setVisibility(structureIds.isEmpty() ? View.VISIBLE : View.GONE);
-        }
-
-        // Se estiver visualizando uma estrutura específica, atualizar suas fotos
-        if (currentStructureId > 0 && galleryViewFlipper != null && galleryViewFlipper.getDisplayedChild() == 1) {
-            updatePhotosForCurrentStructure();
+        } catch (Exception e) {
+            Log.e(TAG, "Error refreshing gallery", e);
         }
     }
 
@@ -507,7 +724,12 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         Log.d(TAG, "Showing gallery view");
 
         if (viewFlipper != null) {
-            // Refresh gallery before showing
+            // IMPORTANT: Always refresh gallery data before showing
+            if (photoStorageManager != null) {
+                photoStorageManager.refresh();
+            }
+
+            // Force refresh the gallery content
             refreshGallery();
 
             // Show gallery page
@@ -525,6 +747,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             }
         }
     }
+
 
     private void showMissionView() {
         Log.d(TAG, "Showing mission view");
@@ -592,29 +815,39 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         Log.d(TAG, "Updating photos for structure: " + currentStructureId);
 
         if (currentStructureId <= 0) {
+            Log.d(TAG, "Invalid structure ID, not updating photos");
             return;
         }
 
-        // Get photos for this structure
-        List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getPhotosForStructure(currentStructureId);
-        Log.d(TAG, "Found " + photos.size() + " photos for structure: " + currentStructureId);
+        try {
+            // Get photos for this structure
+            List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getPhotosForStructure(currentStructureId);
+            Log.d(TAG, "Found " + photos.size() + " photos for structure: " + currentStructureId);
 
-        // Update no photos text visibility
-        if (noPhotosText != null) {
-            noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
-        }
-
-        // Update photo adapter
-        if (recyclerPhotos != null) {
-            if (photoGalleryAdapter == null) {
-                photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), photos, this);
-                recyclerPhotos.setAdapter(photoGalleryAdapter);
-            } else {
-                photoGalleryAdapter.updatePhotoList(photos);
-
-                // Garantir que o adaptador correto esteja configurado
-                recyclerPhotos.setAdapter(photoGalleryAdapter);
+            // Update no photos text visibility
+            if (noPhotosText != null) {
+                noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
             }
+
+            // Update photo adapter
+            if (recyclerPhotos != null) {
+                if (photoGalleryAdapter == null) {
+                    photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), photos, this);
+                    recyclerPhotos.setAdapter(photoGalleryAdapter);
+                } else {
+                    photoGalleryAdapter.updatePhotoList(photos);
+                    // IMPORTANT: Always ensure adapter is set to RecyclerView
+                    if (recyclerPhotos.getAdapter() != photoGalleryAdapter) {
+                        recyclerPhotos.setAdapter(photoGalleryAdapter);
+                    }
+                }
+                // Force adapter to refresh
+                photoGalleryAdapter.notifyDataSetChanged();
+            } else {
+                Log.e(TAG, "recyclerPhotos is null in updatePhotosForCurrentStructure");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating photos for structure", e);
         }
     }
 
@@ -1050,6 +1283,24 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
     @Override
     protected void onDetachedFromWindow() {
+        // Make sure we unlock orientation
+        unlockOrientation();
+
+        // Clean up live stream
+        if (liveStreamView != null) {
+            liveStreamView.cleanup();
+            liveStreamView = null;
+        }
+
+        if (liveStreamContainer != null) {
+            liveStreamContainer.removeAllViews();
+        }
+
+        // Clear handler callbacks
+        if (mainHandler != null) {
+            mainHandler.removeCallbacksAndMessages(null);
+        }
+
         tearDownListener();
 
         if (flightAssistant != null) {
@@ -1927,49 +2178,49 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     // Method to take photos manually (always simulates for now)
     private void takePhoto() {
         // COMMENTED OUT FOR FUTURE USE - Real camera functionality
-    /*
-    if (camera != null && !isSimulatorMode) {
-        camera.setShootPhotoMode(SettingsDefinitions.ShootPhotoMode.SINGLE, new CommonCallbacks.CompletionCallback() {
-            @Override
-            public void onResult(final DJIError djiError) {
-                post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (djiError == null) {
-                            // Photo mode set, now take the photo
-                            camera.startShootPhoto(new CommonCallbacks.CompletionCallback() {
-                                @Override
-                                public void onResult(final DJIError djiError) {
-                                    post(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            if (djiError == null) {
-                                                updateStatus("Foto tirada com sucesso");
+        /*
+        if (camera != null && !isSimulatorMode) {
+            camera.setShootPhotoMode(SettingsDefinitions.ShootPhotoMode.SINGLE, new CommonCallbacks.CompletionCallback() {
+                @Override
+                public void onResult(final DJIError djiError) {
+                    post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (djiError == null) {
+                                // Photo mode set, now take the photo
+                                camera.startShootPhoto(new CommonCallbacks.CompletionCallback() {
+                                    @Override
+                                    public void onResult(final DJIError djiError) {
+                                        post(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                if (djiError == null) {
+                                                    updateStatus("Foto tirada com sucesso");
 
-                                                // Wait a moment for the drone to process the photo
-                                                new Handler().postDelayed(new Runnable() {
-                                                    @Override
-                                                    public void run() {
-                                                        // Show the photo for review
-                                                        fetchLatestPhotoForReview();
-                                                    }
-                                                }, 2000); // 2 seconds
-                                            } else {
-                                                updateStatus("Falha ao tirar foto: " + djiError.getDescription());
+                                                    // Wait a moment for the drone to process the photo
+                                                    new Handler().postDelayed(new Runnable() {
+                                                        @Override
+                                                        public void run() {
+                                                            // Show the photo for review
+                                                            fetchLatestPhotoForReview();
+                                                        }
+                                                    }, 2000); // 2 seconds
+                                                } else {
+                                                    updateStatus("Falha ao tirar foto: " + djiError.getDescription());
+                                                }
                                             }
-                                        }
-                                    });
-                                }
-                            });
-                        } else {
-                            updateStatus("Falha ao configurar modo de foto: " + djiError.getDescription());
+                                        });
+                                    }
+                                });
+                            } else {
+                                updateStatus("Falha ao configurar modo de foto: " + djiError.getDescription());
+                            }
                         }
-                    }
-                });
-            }
-        });
-    } else {
-    */
+                    });
+                }
+            });
+        } else {
+        */
         // Always use simulation for now
         updateStatus("Tirando foto simulada...");
         simulatePhoto();
