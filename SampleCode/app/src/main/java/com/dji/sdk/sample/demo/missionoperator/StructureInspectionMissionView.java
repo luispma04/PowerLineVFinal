@@ -168,8 +168,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private Bitmap lastPhotoTaken = null;
     private SettingsDefinitions.StorageLocation storageLocation = SettingsDefinitions.StorageLocation.INTERNAL_STORAGE;
 
-    // Flag for simulator mode
-    private boolean isSimulatorMode = true;
+    // Flag for simulator mode - default to false for real drone testing
+    private boolean isSimulatorMode = false;
     // Store initial home location for return to home functionality
     private double initialHomeLat;
     private double initialHomeLon;
@@ -188,6 +188,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     // Flag para rastrear se a visualização de live stream está ativa
     private boolean isLiveStreamActive = false;
     private Handler mainHandler = new Handler(Looper.getMainLooper());
+    private static final String KEY_LIVESTREAM_ACTIVE = "is_livestream_active";
 
     // For orientation locking
     private int originalOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
@@ -223,13 +224,21 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     }
 
     public StructureInspectionMissionView(Context context) {
-        this(context, false);
+        this(context, false); // Default to real drone mode for testing
     }
 
     public StructureInspectionMissionView(Context context, boolean simulatorMode) {
         super(context);
         Log.d(TAG, "Initializing StructureInspectionMissionView with simulatorMode: " + simulatorMode);
         this.isSimulatorMode = simulatorMode;
+
+        // Log mode for debugging
+        if (simulatorMode) {
+            Log.i(TAG, "Running in SIMULATOR mode - photos will be simulated");
+        } else {
+            Log.i(TAG, "Running in REAL DRONE mode - will attempt to use real camera");
+        }
+
         init(context);
     }
 
@@ -243,11 +252,18 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         Log.d(TAG, "Configuration changed to: " + (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait"));
 
         try {
-            // CRITICAL: Save ALL states BEFORE modifying any views
-            boolean wasLiveStreamActive = isLiveStreamActive;
+            // SAVE CURRENT STATE - simple approach
             int mainViewFlipperState = 0;
             int galleryViewFlipperState = 0;
             int savedStructureId = currentStructureId;
+
+            // CRUCIAL: Check if live stream is ACTUALLY visible, not just the flag
+            boolean liveStreamWasVisible = false;
+            if (liveStreamContainer != null) {
+                liveStreamWasVisible = liveStreamContainer.getVisibility() == View.VISIBLE &&
+                        liveStreamContainer.getChildCount() > 0;
+                Log.d(TAG, "Live stream container was " + (liveStreamWasVisible ? "visible" : "not visible"));
+            }
 
             if (viewFlipper != null) {
                 mainViewFlipperState = viewFlipper.getDisplayedChild();
@@ -257,10 +273,11 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 galleryViewFlipperState = galleryViewFlipper.getDisplayedChild();
             }
 
-            // First handle live stream state
-            if (liveStreamContainer != null && liveStreamView != null) {
-                liveStreamView.cleanup();
+            // Clean up live stream view if it exists
+            if (liveStreamContainer != null) {
                 liveStreamContainer.removeAllViews();
+            }
+            if (liveStreamView != null) {
                 liveStreamView = null;
             }
 
@@ -275,51 +292,59 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             // Re-initialize views
             findViews();
             setupListeners();
-
-            // IMPORTANT: Always refresh the photo storage manager here
-            // This ensures gallery data is always current
-            if (photoStorageManager != null) {
-                photoStorageManager.refresh();
-            }
-
-            // Initialize gallery components but don't load data yet
             initPhotoGallery();
 
-            // Update states and connection
+            // Update UI states
             updateConnectionStatus();
             updateViewsBasedOnState();
 
-            // IMPORTANT: First restore normal main view state (mission vs gallery)
+            // Restore normal view state
             if (viewFlipper != null) {
                 viewFlipper.setDisplayedChild(mainViewFlipperState);
             }
 
-            // IMPORTANT: Now handle gallery state and populate data if needed
+            // Restore gallery state
             if (mainViewFlipperState == 1 && galleryViewFlipper != null) {
-                // We're in gallery view, so refresh gallery data completely
-                refreshGallery();
+                galleryViewFlipper.setDisplayedChild(galleryViewFlipperState);
 
-                if (galleryViewFlipperState == 0) {
-                    // We were in structures list
-                    showStructuresList();
-                } else if (galleryViewFlipperState == 1 && savedStructureId > 0) {
-                    // We were viewing photos for a specific structure
+                if (galleryViewFlipperState == 1 && savedStructureId > 0) {
                     showPhotosForStructure(savedStructureId);
                 }
             }
 
-            // LAST: Restore live stream if it was active
-            if (wasLiveStreamActive) {
-                new Handler().postDelayed(() -> {
-                    showLiveStreamView();
+            // ONLY restore live stream if it was ACTUALLY visible before
+            if (liveStreamWasVisible && liveStreamContainer != null) {
+                // Use a delay to ensure views are stable
+                mainHandler.postDelayed(() -> {
+                    try {
+                        // Create new live stream view
+                        liveStreamView = new StructureLiveStreamView(getContext());
+                        liveStreamView.setOnCloseListener(() -> hideLiveStreamView());
+
+                        // Show it
+                        liveStreamContainer.addView(liveStreamView);
+                        liveStreamContainer.setVisibility(View.VISIBLE);
+                        isLiveStreamActive = true;
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error recreating live stream", e);
+                    }
                 }, 300);
+            } else {
+                // Make sure live stream stays hidden
+                isLiveStreamActive = false;
+                if (liveStreamContainer != null) {
+                    liveStreamContainer.setVisibility(View.GONE);
+                }
             }
         } catch (Exception e) {
             Log.e(TAG, "Error during configuration change", e);
-            updateStatus("Erro durante rotação do dispositivo: " + e.getMessage());
+            // Try to recover to a stable state
+            isLiveStreamActive = false;
+            if (liveStreamContainer != null) {
+                liveStreamContainer.setVisibility(View.GONE);
+            }
         }
     }
-
 
     // Modified init method
     private void init(Context context) {
@@ -473,52 +498,45 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         }
 
         if (btnLiveStream != null) {
-            // Remove any existing listeners to prevent duplicates
-            btnLiveStream.setOnClickListener(null);
-
-            // Add new listener with better debug info
             btnLiveStream.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    Log.d(TAG, "Live stream button clicked - orientation: " +
-                            (getResources().getConfiguration().orientation ==
-                                    Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait"));
                     showLiveStreamView();
                 }
             });
-
-            // Ensure the button is visible and enabled
-            btnLiveStream.setVisibility(View.VISIBLE);
-            btnLiveStream.setEnabled(true);
-        } else {
-            Log.e(TAG, "Live stream button not found in current layout");
         }
     }
 
     private void showLiveStreamView() {
         Log.d(TAG, "showLiveStreamView called");
 
-        if (liveStreamContainer == null) {
-            Log.e(TAG, "Error: Live stream container is null");
-            // Try to find it again if null
-            liveStreamContainer = findViewById(R.id.live_stream_container);
+        try {
             if (liveStreamContainer == null) {
-                updateStatus("Erro: Container de livestream não encontrado");
+                Log.e(TAG, "Live stream container not found");
                 return;
             }
-        }
 
-        try {
-            // Clean up existing view
+            // Clean up any existing view
             if (liveStreamView != null) {
-                liveStreamView.cleanup();
+                // Try to clean up properly but don't crash
+                try {
+                    liveStreamView.cleanup();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error cleaning up existing live stream view", e);
+                }
             }
             liveStreamContainer.removeAllViews();
 
-            // Create a new live stream view with the proper orientation context
-            liveStreamView = new StructureLiveStreamView(getContext());
+            // Create new view with error handling
+            try {
+                liveStreamView = new StructureLiveStreamView(getContext());
+                Log.d(TAG, "Created new live stream view: " + liveStreamView);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to create live stream view", e);
+                return;
+            }
 
-            // IMPORTANT: Set close listener BEFORE adding to container
+            // Set close listener
             liveStreamView.setOnCloseListener(new StructureLiveStreamView.OnCloseListener() {
                 @Override
                 public void onClose() {
@@ -529,28 +547,15 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
             // Add view to container
             liveStreamContainer.addView(liveStreamView);
-
-            // Make container visible
             liveStreamContainer.setVisibility(View.VISIBLE);
 
-            // Update state flag
+            // Update state
             isLiveStreamActive = true;
-
-            // Lock orientation AFTER UI is visible and working
-            lockCurrentOrientation();
-
-            Log.d(TAG, "Live stream view successfully shown");
+            Log.d(TAG, "Live stream view shown successfully");
         } catch (Exception e) {
-            Log.e(TAG, "Error showing live stream view", e);
-            updateStatus("Erro ao mostrar livestream: " + e.getMessage());
-
+            Log.e(TAG, "Error showing live stream", e);
             // Reset state
             isLiveStreamActive = false;
-            unlockOrientation();
-
-            if (liveStreamContainer != null) {
-                liveStreamContainer.setVisibility(View.GONE);
-            }
         }
     }
 
@@ -558,25 +563,25 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         Log.d(TAG, "hideLiveStreamView called");
 
         try {
-            // Reset state flag
+            // Update state first
             isLiveStreamActive = false;
 
-            // Unlock orientation
-            unlockOrientation();
-
-            // Hide and clean container
+            // Then handle UI
             if (liveStreamContainer != null) {
                 liveStreamContainer.setVisibility(View.GONE);
                 liveStreamContainer.removeAllViews();
             }
 
-            // Clean up view
             if (liveStreamView != null) {
-                liveStreamView.cleanup();
+                try {
+                    liveStreamView.cleanup();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error during live stream cleanup", e);
+                }
                 liveStreamView = null;
             }
 
-            Log.d(TAG, "Live stream view hidden successfully");
+            Log.d(TAG, "Live stream view hidden");
         } catch (Exception e) {
             Log.e(TAG, "Error hiding live stream view", e);
         }
@@ -588,33 +593,42 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             if (getContext() instanceof Activity) {
                 Activity activity = (Activity) getContext();
 
-                // Save current orientation
+                // Save current orientation before changing it
                 originalOrientation = activity.getRequestedOrientation();
 
-                // Get current rotation
+                // Get current rotation and device orientation
                 int currentRotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+                int currentOrientation = getResources().getConfiguration().orientation;
 
-                // Lock to current orientation
-                switch (currentRotation) {
-                    case Surface.ROTATION_0:
-                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-                        break;
-                    case Surface.ROTATION_90:
+                Log.d(TAG, "Current rotation: " + currentRotation + ", orientation: " +
+                        (currentOrientation == Configuration.ORIENTATION_LANDSCAPE ? "landscape" : "portrait"));
+
+                // Force orientation lock based on current orientation rather than rotation
+                // This is more reliable across different devices
+                if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+                    // Detect if we're in regular or reverse landscape
+                    if (currentRotation == Surface.ROTATION_90) {
                         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-                        break;
-                    case Surface.ROTATION_180:
-                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
-                        break;
-                    case Surface.ROTATION_270:
+                        Log.d(TAG, "Locked to LANDSCAPE");
+                    } else {
                         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
-                        break;
-                    default:
+                        Log.d(TAG, "Locked to REVERSE LANDSCAPE");
+                    }
+                } else {
+                    // Detect if we're in regular or reverse portrait
+                    if (currentRotation == Surface.ROTATION_0) {
                         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-                        break;
+                        Log.d(TAG, "Locked to PORTRAIT");
+                    } else {
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
+                        Log.d(TAG, "Locked to REVERSE PORTRAIT");
+                    }
                 }
 
                 orientationLocked = true;
-                Log.d(TAG, "Orientation locked");
+                Log.d(TAG, "Orientation successfully locked");
+            } else {
+                Log.e(TAG, "Context is not an Activity, cannot lock orientation");
             }
         } catch (Exception e) {
             Log.e(TAG, "Error locking orientation", e);
@@ -627,13 +641,34 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 Activity activity = (Activity) getContext();
 
                 // Restore original orientation
-                activity.setRequestedOrientation(originalOrientation);
+                if (originalOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                    activity.setRequestedOrientation(originalOrientation);
+                    Log.d(TAG, "Restored to original orientation: " + originalOrientation);
+                } else {
+                    // If no original orientation was saved, set to sensor (automatic)
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
+                    Log.d(TAG, "Reset to SCREEN_ORIENTATION_SENSOR (automatic)");
+                }
 
                 orientationLocked = false;
-                Log.d(TAG, "Orientation unlocked");
+                Log.d(TAG, "Orientation successfully unlocked");
+            } else {
+                Log.d(TAG, "Orientation was not locked or context is not an Activity");
             }
         } catch (Exception e) {
             Log.e(TAG, "Error unlocking orientation", e);
+
+            // Try fallback to sensor mode in case of error
+            try {
+                if (getContext() instanceof Activity) {
+                    ((Activity) getContext()).setRequestedOrientation(
+                            ActivityInfo.SCREEN_ORIENTATION_SENSOR);
+                    Log.d(TAG, "Fallback to SCREEN_ORIENTATION_SENSOR");
+                }
+            } catch (Exception ignored) {
+                // Last resort - just log
+                Log.e(TAG, "Failed even with fallback orientation unlock");
+            }
         }
     }
 
@@ -667,55 +702,42 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private void refreshGallery() {
         Log.d(TAG, "Refreshing gallery");
 
-        try {
-            // Refresh photo storage data
-            if (photoStorageManager != null) {
-                photoStorageManager.refresh();
+        // Refresh photo storage
+        photoStorageManager.refresh();
 
-                // Get structures with photos
-                List<Integer> structureIds = photoStorageManager.getStructureIdsWithPhotos();
-                Log.d(TAG, "Found " + structureIds.size() + " structures with photos");
+        // Obter estruturas com fotos
+        List<Integer> structureIds = photoStorageManager.getStructureIdsWithPhotos();
+        Log.d(TAG, "Found " + structureIds.size() + " structures with photos");
 
-                // Update structures list view
-                if (recyclerStructures != null) {
-                    if (structureFolderAdapter == null) {
-                        structureFolderAdapter = new StructureFolderAdapter(
-                                getContext(),
-                                structureIds,
-                                photoStorageManager,
-                                new StructureFolderAdapter.OnStructureClickListener() {
-                                    @Override
-                                    public void onStructureClick(int structureId) {
-                                        Log.d(TAG, "Structure clicked: " + structureId);
-                                        showPhotosForStructure(structureId);
-                                    }
-                                }
-                        );
-                        recyclerStructures.setAdapter(structureFolderAdapter);
-                    } else {
-                        structureFolderAdapter.updateStructureList(structureIds);
-                        // Ensure adapter is set
-                        if (recyclerStructures.getAdapter() != structureFolderAdapter) {
-                            recyclerStructures.setAdapter(structureFolderAdapter);
+        // Atualizar a visualização da lista de estruturas
+        if (recyclerStructures != null) {
+            if (structureFolderAdapter == null) {
+                structureFolderAdapter = new StructureFolderAdapter(
+                        getContext(),
+                        structureIds,
+                        photoStorageManager,
+                        new StructureFolderAdapter.OnStructureClickListener() {
+                            @Override
+                            public void onStructureClick(int structureId) {
+                                Log.d(TAG, "Structure clicked: " + structureId);
+                                showPhotosForStructure(structureId);
+                            }
                         }
-                    }
-                }
-
-                // Update "no structures" text visibility
-                if (noStructuresText != null) {
-                    noStructuresText.setVisibility(structureIds.isEmpty() ? View.VISIBLE : View.GONE);
-                }
-
-                // If viewing a specific structure, update photos
-                if (currentStructureId > 0 && galleryViewFlipper != null &&
-                        galleryViewFlipper.getDisplayedChild() == 1) {
-                    updatePhotosForCurrentStructure();
-                }
+                );
+                recyclerStructures.setAdapter(structureFolderAdapter);
             } else {
-                Log.e(TAG, "photoStorageManager is null in refreshGallery");
+                structureFolderAdapter.updateStructureList(structureIds);
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Error refreshing gallery", e);
+        }
+
+        // Atualizar a visibilidade do texto "Sem estruturas"
+        if (noStructuresText != null) {
+            noStructuresText.setVisibility(structureIds.isEmpty() ? View.VISIBLE : View.GONE);
+        }
+
+        // Se estiver visualizando uma estrutura específica, atualizar suas fotos
+        if (currentStructureId > 0 && galleryViewFlipper != null && galleryViewFlipper.getDisplayedChild() == 1) {
+            updatePhotosForCurrentStructure();
         }
     }
 
@@ -724,12 +746,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         Log.d(TAG, "Showing gallery view");
 
         if (viewFlipper != null) {
-            // IMPORTANT: Always refresh gallery data before showing
-            if (photoStorageManager != null) {
-                photoStorageManager.refresh();
-            }
-
-            // Force refresh the gallery content
+            // Refresh gallery before showing
             refreshGallery();
 
             // Show gallery page
@@ -747,7 +764,6 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             }
         }
     }
-
 
     private void showMissionView() {
         Log.d(TAG, "Showing mission view");
@@ -815,39 +831,29 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         Log.d(TAG, "Updating photos for structure: " + currentStructureId);
 
         if (currentStructureId <= 0) {
-            Log.d(TAG, "Invalid structure ID, not updating photos");
             return;
         }
 
-        try {
-            // Get photos for this structure
-            List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getPhotosForStructure(currentStructureId);
-            Log.d(TAG, "Found " + photos.size() + " photos for structure: " + currentStructureId);
+        // Get photos for this structure
+        List<PhotoStorageManager.PhotoInfo> photos = photoStorageManager.getPhotosForStructure(currentStructureId);
+        Log.d(TAG, "Found " + photos.size() + " photos for structure: " + currentStructureId);
 
-            // Update no photos text visibility
-            if (noPhotosText != null) {
-                noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
-            }
+        // Update no photos text visibility
+        if (noPhotosText != null) {
+            noPhotosText.setVisibility(photos.isEmpty() ? View.VISIBLE : View.GONE);
+        }
 
-            // Update photo adapter
-            if (recyclerPhotos != null) {
-                if (photoGalleryAdapter == null) {
-                    photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), photos, this);
-                    recyclerPhotos.setAdapter(photoGalleryAdapter);
-                } else {
-                    photoGalleryAdapter.updatePhotoList(photos);
-                    // IMPORTANT: Always ensure adapter is set to RecyclerView
-                    if (recyclerPhotos.getAdapter() != photoGalleryAdapter) {
-                        recyclerPhotos.setAdapter(photoGalleryAdapter);
-                    }
-                }
-                // Force adapter to refresh
-                photoGalleryAdapter.notifyDataSetChanged();
+        // Update photo adapter
+        if (recyclerPhotos != null) {
+            if (photoGalleryAdapter == null) {
+                photoGalleryAdapter = new PhotoGalleryAdapter(getContext(), photos, this);
+                recyclerPhotos.setAdapter(photoGalleryAdapter);
             } else {
-                Log.e(TAG, "recyclerPhotos is null in updatePhotosForCurrentStructure");
+                photoGalleryAdapter.updatePhotoList(photos);
+
+                // Garantir que o adaptador correto esteja configurado
+                recyclerPhotos.setAdapter(photoGalleryAdapter);
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Error updating photos for structure", e);
         }
     }
 
@@ -995,7 +1001,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             openFilePicker(REQUEST_STRUCTURES_CSV);
         } else if (id == R.id.btn_load_photo_positions) {
             openFilePicker(REQUEST_PHOTO_POSITIONS_CSV);
-        }else if (id == R.id.btn_start_mission) {
+        } else if (id == R.id.btn_start_mission) {
             if (isMissionPaused || missionPausedForPhotoReview) {
                 resumeMission();
             } else if (mission != null) {
@@ -1032,6 +1038,13 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         flightController = aircraft.getFlightController();
         camera = aircraft.getCamera();
 
+        // Log camera availability for debugging
+        if (camera != null) {
+            Log.i(TAG, "Camera initialized successfully - real camera mode available");
+        } else {
+            Log.w(TAG, "Camera not available - will use simulator mode");
+        }
+
         // Initialize FlightAssistant
         if (flightController != null) {
             flightAssistant = flightController.getFlightAssistant();
@@ -1058,14 +1071,18 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                     @Override
                     public void onSuccess(SettingsDefinitions.StorageLocation value) {
                         storageLocation = value;
+                        Log.i(TAG, "Camera storage location: " + value.name());
                     }
 
                     @Override
                     public void onFailure(DJIError djiError) {
                         updateStatus("Failed to get storage location: " + djiError.getDescription());
+                        Log.e(TAG, "Failed to get storage location");
                     }
                 });
             }
+        } else {
+            Log.w(TAG, "MediaManager not available - photo review will use simulation");
         }
 
         if (flightController != null) {
@@ -1109,6 +1126,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
     /**
      * Enable obstacle avoidance features
+     *
      * @param enable true to enable, false to disable
      */
     private void enableObstacleAvoidance(final boolean enable) {
@@ -1283,12 +1301,16 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
     @Override
     protected void onDetachedFromWindow() {
-        // Make sure we unlock orientation
-        unlockOrientation();
+        // Reset state flag
+        isLiveStreamActive = false;
 
         // Clean up live stream
         if (liveStreamView != null) {
-            liveStreamView.cleanup();
+            try {
+                liveStreamView.cleanup();
+            } catch (Exception e) {
+                Log.e(TAG, "Error cleaning up live stream view", e);
+            }
             liveStreamView = null;
         }
 
@@ -1401,13 +1423,15 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 }
 
                 String[] values = line.split(",");
+                // Now expecting 4 fields: latitude, longitude, elevation_difference, structure_height
                 if (values.length >= 4) {
                     double lat = Double.parseDouble(values[0]);
                     double lon = Double.parseDouble(values[1]);
-                    float alt = Float.parseFloat(values[2]);
-                    float height = Float.parseFloat(values[3]);
+                    float elevationDiff = Float.parseFloat(values[2]); // Elevation difference from base level
+                    float height = Float.parseFloat(values[3]); // Structure height
 
-                    inspectionPoints.add(new InspectionPoint(lat, lon, alt, height));
+                    // Use elevation difference as ground altitude relative to base level
+                    inspectionPoints.add(new InspectionPoint(lat, lon, elevationDiff, height));
                 }
             }
 
@@ -1424,7 +1448,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                         btnStartMission.setEnabled(true);
                     }
 
-                    updateStatus("Carregado " + inspectionPoints.size() + " estruturas");
+                    updateStatus("Carregado " + inspectionPoints.size() + " estruturas (formato: lat,lon,elevation_diff,height)");
                     updateAdvancedMissionInfo();
                 }
             });
@@ -1433,6 +1457,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             final String errorMsg = e.getMessage();
             updateStatus("Erro ao carregar arquivo de estruturas: " + errorMsg);
             Log.e(TAG, "Error reading structures CSV file", e);
+        } catch (NumberFormatException e) {
+            updateStatus("Erro no formato CSV: verifique se os dados são numéricos (lat,lon,elevation_diff,height)");
+            Log.e(TAG, "Error parsing CSV numbers", e);
         }
     }
 
@@ -1532,8 +1559,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         for (int i = 0; i < inspectionPoints.size(); i++) {
             InspectionPoint point = inspectionPoints.get(i);
 
-            // Calculate safe altitude for the structure
-            float safeAltitude = point.groundAltitude + point.structureHeight + SAFE_DISTANCE;
+            // Calculate safe altitude for the structure (using DEFAULT_ALTITUDE + structure height + safety margin)
+            float safeAltitude = DEFAULT_ALTITUDE + point.structureHeight + SAFE_DISTANCE;
 
             // First waypoint: Go to the inspection point at safe altitude
             Waypoint initialWaypoint = new Waypoint(
@@ -1551,7 +1578,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 // Calculate absolute coordinates from relative offsets
                 double photoLatitude = point.latitude + (photoPoint.offsetY * ONE_METER_OFFSET);
                 double photoLongitude = point.longitude + (photoPoint.offsetX * ONE_METER_OFFSET);
-                float photoAltitude = point.groundAltitude + point.structureHeight + photoPoint.offsetZ;
+
+                // Calculate photo altitude: base altitude + structure height + relative Z offset
+                float photoAltitude = DEFAULT_ALTITUDE + point.structureHeight + photoPoint.offsetZ;
 
                 // Create the waypoint
                 Waypoint photoWaypoint = new Waypoint(photoLatitude, photoLongitude, photoAltitude);
@@ -1914,8 +1943,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
                     // Update status with current progress
                     updateStatus("Waypoint: " + currentWaypointIndex + "/" + totalWaypointCount +
-                            " | Estrutura: " + (currentInspectionIndex+1) + "/" + inspectionPoints.size() +
-                            " | Foto: " + (currentPhotoIndex+1) + "/" + photoPoints.size());
+                            " | Estrutura: " + (currentInspectionIndex + 1) + "/" + inspectionPoints.size() +
+                            " | Foto: " + (currentPhotoIndex + 1) + "/" + photoPoints.size());
 
                     // If this is a photo waypoint and the photo has been taken
                     if (isPhotoWaypoint &&
@@ -2175,11 +2204,11 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     }
 
     // Method to take photos manually (used during mission and for manual photo button)
-    // Method to take photos manually (always simulates for now)
     private void takePhoto() {
-        // COMMENTED OUT FOR FUTURE USE - Real camera functionality
-        /*
+        // Use real camera if available and not in simulator mode
         if (camera != null && !isSimulatorMode) {
+            updateStatus("Configurando câmera para foto...");
+
             camera.setShootPhotoMode(SettingsDefinitions.ShootPhotoMode.SINGLE, new CommonCallbacks.CompletionCallback() {
                 @Override
                 public void onResult(final DJIError djiError) {
@@ -2187,6 +2216,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                         @Override
                         public void run() {
                             if (djiError == null) {
+                                updateStatus("Tirando foto...");
+
                                 // Photo mode set, now take the photo
                                 camera.startShootPhoto(new CommonCallbacks.CompletionCallback() {
                                     @Override
@@ -2207,6 +2238,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                                                     }, 2000); // 2 seconds
                                                 } else {
                                                     updateStatus("Falha ao tirar foto: " + djiError.getDescription());
+                                                    // Fallback to simulation
+                                                    simulatePhoto();
+                                                    showPhotoConfirmationDialog(lastPhotoTaken);
                                                 }
                                             }
                                         });
@@ -2214,23 +2248,25 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                                 });
                             } else {
                                 updateStatus("Falha ao configurar modo de foto: " + djiError.getDescription());
+                                // Fallback to simulation
+                                simulatePhoto();
+                                showPhotoConfirmationDialog(lastPhotoTaken);
                             }
                         }
                     });
                 }
             });
         } else {
-        */
-        // Always use simulation for now
-        updateStatus("Tirando foto simulada...");
-        simulatePhoto();
-        post(new Runnable() {
-            @Override
-            public void run() {
-                showPhotoConfirmationDialog(lastPhotoTaken);
-            }
-        });
-        //}
+            // Use simulation if camera not available or in simulator mode
+            updateStatus("Usando modo simulado (câmera não disponível ou modo simulador)");
+            simulatePhoto();
+            post(new Runnable() {
+                @Override
+                public void run() {
+                    showPhotoConfirmationDialog(lastPhotoTaken);
+                }
+            });
+        }
     }
 
     // Method to show photo confirmation dialog with the new layout
