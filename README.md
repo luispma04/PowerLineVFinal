@@ -102,7 +102,7 @@ O PowerLineDrone é construído utilizando:
 
 ### CSV de Estruturas
 ```
-latitude,longitude,altitude_do_solo,altura_da_estrutura
+latitude,longitude,diferença_de_altitude_base_para_poste,altura_da_estrutura
 38.736946,-9.142685,10.5,25.0
 38.737012,-9.143998,11.2,28.5
 ...
