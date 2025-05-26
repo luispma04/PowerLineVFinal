@@ -82,9 +82,7 @@ O PowerLineDrone é construído utilizando:
 
 ### Planeamento de Missão
 1. Toque em "Importar Estruturas" para carregar o seu ficheiro CSV de coordenadas de estruturas
-   - Formato CSV: latitude,longitude,altitude_do_solo,altura_da_estrutura
 2. Toque em "Importar Posições" para carregar o seu ficheiro CSV de posições de fotografias
-   - Formato CSV: deslocamento_x,deslocamento_y,deslocamento_z,inclinação_gimbal
 
 ### Execução de Missão
 1. Toque em "Iniciar Missão" para começar a inspeção automatizada
