@@ -210,6 +210,13 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
     private int originalOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private boolean orientationLocked = false;
 
+    // ENHANCED PHOTO FETCHING VARIABLES
+    private int photoFetchRetryCount = 0;
+    private static final int MAX_PHOTO_FETCH_RETRIES = 5;
+    private static final long PHOTO_FETCH_RETRY_DELAY = 2000; // 2 seconds
+    private boolean isPhotoFetchInProgress = false;
+    private long lastPhotoTakenTime = 0;
+
     // Data classes for storing mission information
     private class InspectionPoint {
         double latitude;
@@ -926,6 +933,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
         if (camera != null) {
             Log.i(TAG, "Camera initialized successfully - real camera mode available");
+
+            // ENHANCED: Set up media manager immediately
+            setupMediaManagerForPhotoFetching();
         } else {
             Log.w(TAG, "Camera not available - will use simulator mode");
         }
@@ -956,30 +966,6 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 Log.e(TAG, "FlightAssistant is null");
                 updateStatus("FlightAssistant não disponível");
             }
-        }
-
-        if (camera != null) {
-            mediaManager = camera.getMediaManager();
-
-            if (mediaManager != null) {
-                scheduler = mediaManager.getScheduler();
-
-                camera.getStorageLocation(new CommonCallbacks.CompletionCallbackWith<SettingsDefinitions.StorageLocation>() {
-                    @Override
-                    public void onSuccess(SettingsDefinitions.StorageLocation value) {
-                        storageLocation = value;
-                        Log.i(TAG, "Camera storage location: " + value.toString()); // Use toString() for DJI SDK enums
-                    }
-
-                    @Override
-                    public void onFailure(DJIError djiError) {
-                        updateStatus("Failed to get storage location: " + djiError.getDescription());
-                        Log.e(TAG, "Failed to get storage location");
-                    }
-                });
-            }
-        } else {
-            Log.w(TAG, "MediaManager not available - photo review will use simulation");
         }
 
         if (flightController != null) {
@@ -1016,6 +1002,54 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
 
         waypointMissionOperator = MissionControl.getInstance().getWaypointMissionOperator();
         setUpListener();
+    }
+
+    // ENHANCED: Setup media manager properly for photo fetching
+    private void setupMediaManagerForPhotoFetching() {
+        if (camera == null) {
+            Log.e(TAG, "Camera is null, cannot setup media manager");
+            return;
+        }
+
+        mediaManager = camera.getMediaManager();
+        if (mediaManager != null) {
+            scheduler = mediaManager.getScheduler();
+            Log.d(TAG, "✅ MediaManager and scheduler initialized successfully");
+
+            // Get and set storage location
+            camera.getStorageLocation(new CommonCallbacks.CompletionCallbackWith<SettingsDefinitions.StorageLocation>() {
+                @Override
+                public void onSuccess(SettingsDefinitions.StorageLocation value) {
+                    storageLocation = value;
+                    Log.i(TAG, "📍 Storage location set to: " + value.toString());
+                    updateStatus("Storage configurado: " + value.toString());
+                }
+
+                @Override
+                public void onFailure(DJIError djiError) {
+                    Log.e(TAG, "❌ Failed to get storage location: " + djiError.getDescription());
+                    // Try setting to internal storage as fallback
+                    storageLocation = SettingsDefinitions.StorageLocation.INTERNAL_STORAGE;
+                    updateStatus("Storage padrão configurado (erro ao detectar: " + djiError.getDescription() + ")");
+                }
+            });
+
+            // Resume scheduler if needed
+            if (scheduler != null && scheduler.getState() == FetchMediaTaskScheduler.FetchMediaTaskSchedulerState.SUSPENDED) {
+                scheduler.resume(new CommonCallbacks.CompletionCallback() {
+                    @Override
+                    public void onResult(DJIError djiError) {
+                        if (djiError == null) {
+                            Log.d(TAG, "✅ Media scheduler resumed successfully");
+                        } else {
+                            Log.e(TAG, "❌ Failed to resume media scheduler: " + djiError.getDescription());
+                        }
+                    }
+                });
+            }
+        } else {
+            Log.e(TAG, "❌ MediaManager is null - photo fetching will not work properly");
+        }
     }
 
     // GIMBAL SETUP METHODS
@@ -2191,8 +2225,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                             }
                         });
 
-                        // ALWAYS TRY REAL CAMERA - REMOVED SIMULATOR MODE CHECK
-                        takeRealPhoto();
+                        // ENHANCED: Wait for photo to be taken and processed by DJI, then fetch it
+                        fetchLatestDronePhotoWithRetry();
                     } else {
                         Log.e(TAG, "❌ Failed to pause mission: " + djiError.getDescription());
                         updateStatus("Falha ao pausar para revisão: " + djiError.getDescription());
@@ -2208,344 +2242,320 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         }
     }
 
-    // MODIFIED: takeRealPhoto - No simulation fallback, try harder to get real photo
-    private void takeRealPhoto() {
-        if (camera != null) {
-            Log.d(TAG, "📸 Taking real photo with drone camera");
-            updateStatus("Configurando câmera para foto...");
+    // ENHANCED: Robust photo fetching with retry mechanism
+    private void fetchLatestDronePhotoWithRetry() {
+        Log.d(TAG, "🔄 Starting enhanced photo fetch with retry mechanism");
 
-            camera.setShootPhotoMode(SettingsDefinitions.ShootPhotoMode.SINGLE, new CommonCallbacks.CompletionCallback() {
-                @Override
-                public void onResult(final DJIError djiError) {
-                    post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (djiError == null) {
-                                updateStatus("Tirando foto...");
+        // Reset retry counter and set fetch in progress
+        photoFetchRetryCount = 0;
+        isPhotoFetchInProgress = true;
+        lastPhotoTakenTime = System.currentTimeMillis();
 
-                                camera.startShootPhoto(new CommonCallbacks.CompletionCallback() {
-                                    @Override
-                                    public void onResult(final DJIError djiError) {
-                                        post(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                if (djiError == null) {
-                                                    updateStatus("Foto tirada com sucesso, aguardando processamento...");
+        updateStatus("Aguardando processamento da foto...");
 
-                                                    // Wait longer for photo to be processed and saved
-                                                    new Handler().postDelayed(new Runnable() {
-                                                        @Override
-                                                        public void run() {
-                                                            fetchLatestPhotoForReview();
-                                                        }
-                                                    }, 4000); // Increased wait time
-                                                } else {
-                                                    Log.e(TAG, "Failed to take photo: " + djiError.getDescription());
-                                                    updateStatus("Falha ao tirar foto: " + djiError.getDescription());
-                                                    // REMOVED SIMULATION FALLBACK - Try to fetch anyway
-                                                    fetchLatestPhotoForReview();
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
-                            } else {
-                                Log.e(TAG, "Failed to set photo mode: " + djiError.getDescription());
-                                updateStatus("Falha ao configurar modo de foto: " + djiError.getDescription());
-                                // REMOVED SIMULATION FALLBACK - Try to fetch anyway
-                                fetchLatestPhotoForReview();
-                            }
-                        }
-                    });
-                }
-            });
-        } else {
-            Log.w(TAG, "Camera not available");
-            updateStatus("Câmera não disponível - tentando acessar cartão SD diretamente");
-            // REMOVED SIMULATION FALLBACK - Try direct SD access
-            tryDirectSDCardAccess();
-        }
-    }
-
-    private void fetchLatestPhotoForReview() {
-        isWaitingForReview = true;
-        Log.d(TAG, "Fetching latest photo for review...");
-
-        if (mediaManager != null) {
-            updateStatus("Buscando foto no cartão SD...");
-            refreshFileList();
-        } else {
-            Log.w(TAG, "MediaManager not available, trying direct SD card access");
-            updateStatus("MediaManager não disponível, tentando acesso direto ao SD...");
-            // REMOVED SIMULATION FALLBACK - Try direct SD access
-            tryDirectSDCardAccess();
-        }
-    }
-
-    // MODIFIED: refreshFileList - No simulation fallback
-    private void refreshFileList() {
-        if (mediaManager != null && camera != null) {
-            updateStatus("Atualizando lista de arquivos do cartão SD...");
-            Log.d(TAG, "Refreshing file list for storage: " + storageLocation);
-
-            mediaManager.refreshFileListOfStorageLocation(storageLocation, new CommonCallbacks.CompletionCallback() {
-                @Override
-                public void onResult(DJIError djiError) {
-                    if (djiError == null) {
-                        Log.d(TAG, "✅ File list refreshed successfully");
-                        updateStatus("Lista de arquivos atualizada");
-                        // Add small delay to ensure file list is fully updated
-                        new Handler().postDelayed(new Runnable() {
-                            @Override
-                            public void run() {
-                                getFileList();
-                            }
-                        }, 1000);
-                    } else {
-                        Log.e(TAG, "❌ Failed to refresh file list: " + djiError.getDescription());
-                        updateStatus("Erro ao atualizar lista: " + djiError.getDescription());
-                        // REMOVED SIMULATION FALLBACK - Try direct SD access
-                        tryDirectSDCardAccess();
-                    }
-                }
-            });
-        } else {
-            Log.e(TAG, "MediaManager or camera is null");
-            updateStatus("MediaManager ou câmera não disponível");
-            // REMOVED SIMULATION FALLBACK - Try direct SD access
-            tryDirectSDCardAccess();
-        }
-    }
-
-    // MODIFIED: getFileList - No simulation fallback
-    private void getFileList() {
-        if (mediaManager != null) {
-            Log.d(TAG, "Getting file list from storage: " + storageLocation);
-
-            List<MediaFile> mediaFiles;
-
-            if (storageLocation == SettingsDefinitions.StorageLocation.SDCARD) {
-                mediaFiles = mediaManager.getSDCardFileListSnapshot();
-                Log.d(TAG, "Getting SD card file list");
-            } else {
-                mediaFiles = mediaManager.getInternalStorageFileListSnapshot();
-                Log.d(TAG, "Getting internal storage file list");
-            }
-
-            if (mediaFiles != null && !mediaFiles.isEmpty()) {
-                Log.d(TAG, "Found " + mediaFiles.size() + " media files");
-
-                // Get the most recent photo (first in list should be most recent)
-                MediaFile latestMedia = mediaFiles.get(0);
-                Log.d(TAG, "Latest media file: " + latestMedia.getFileName() +
-                        ", Size: " + latestMedia.getFileSize() + " bytes");
-
-                fetchThumbnail(latestMedia);
-            } else {
-                Log.w(TAG, "⚠️ No media files found in storage");
-                updateStatus("Nenhuma foto encontrada no cartão");
-                // REMOVED SIMULATION FALLBACK - Try direct access
-                tryDirectSDCardAccess();
-            }
-        } else {
-            Log.e(TAG, "MediaManager is null in getFileList");
-            updateStatus("MediaManager não disponível");
-            // REMOVED SIMULATION FALLBACK - Try direct access
-            tryDirectSDCardAccess();
-        }
-    }
-
-
-    private void fetchThumbnail(MediaFile mediaFile) {
-        if (mediaFile != null && scheduler != null) {
-            Log.d(TAG, "Fetching thumbnail for: " + mediaFile.getFileName());
-            updateStatus("Carregando preview da foto...");
-
-            FetchMediaTask task = new FetchMediaTask(mediaFile, FetchMediaTaskContent.THUMBNAIL, new FetchMediaTask.Callback() {
-                @Override
-                public void onUpdate(MediaFile file, FetchMediaTaskContent content, DJIError error) {
-                    if (error == null) {
-                        if (content == FetchMediaTaskContent.THUMBNAIL) {
-                            if (file.getThumbnail() != null) {
-                                Log.d(TAG, "✅ Thumbnail fetched successfully");
-                                final Bitmap thumbnail = file.getThumbnail();
-                                post(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        lastPhotoTaken = thumbnail;
-                                        updateStatus("Foto carregada do cartão SD");
-                                        showPhotoConfirmationDialog(thumbnail);
-                                    }
-                                });
-                            } else {
-                                Log.w(TAG, "⚠️ Thumbnail is null");
-                                updateStatus("Preview não disponível");
-                                // REMOVED SIMULATION FALLBACK - Try to fetch full image
-                                fetchFullImage(mediaFile);
-                            }
-                        }
-                    } else {
-                        Log.e(TAG, "❌ Error fetching thumbnail: " + error.getDescription());
-                        updateStatus("Erro ao carregar preview: " + error.getDescription());
-                        // REMOVED SIMULATION FALLBACK - Try to fetch full image
-                        fetchFullImage(mediaFile);
-                    }
-                }
-            });
-
-            scheduler.moveTaskToNext(task);
-        } else {
-            Log.e(TAG, "MediaFile or scheduler is null");
-            updateStatus("Erro: arquivo ou scheduler inválido");
-            // REMOVED SIMULATION FALLBACK - Try direct access
-            tryDirectSDCardAccess();
-        }
-    }
-
-    // NEW METHOD: Fetch full image if thumbnail fails
-    private void fetchFullImage(MediaFile mediaFile) {
-        if (mediaFile != null && scheduler != null) {
-            Log.d(TAG, "Attempting to fetch full image as fallback");
-            updateStatus("Tentando carregar imagem completa...");
-
-            FetchMediaTask task = new FetchMediaTask(mediaFile, FetchMediaTaskContent.PREVIEW, new FetchMediaTask.Callback() {
-                @Override
-                public void onUpdate(MediaFile file, FetchMediaTaskContent content, DJIError error) {
-                    if (error == null && content == FetchMediaTaskContent.PREVIEW) {
-                        if (file.getPreview() != null) {
-                            Log.d(TAG, "✅ Full image preview fetched successfully");
-                            final Bitmap preview = file.getPreview();
-                            post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    lastPhotoTaken = preview;
-                                    updateStatus("Imagem carregada do cartão SD");
-                                    showPhotoConfirmationDialog(preview);
-                                }
-                            });
-                        } else {
-                            Log.w(TAG, "Preview is also null, trying direct SD access");
-                            tryDirectSDCardAccess();
-                        }
-                    } else {
-                        Log.e(TAG, "Failed to fetch full image: " + (error != null ? error.getDescription() : "Unknown error"));
-                        tryDirectSDCardAccess();
-                    }
-                }
-            });
-
-            scheduler.moveTaskToNext(task);
-        } else {
-            tryDirectSDCardAccess();
-        }
-    }
-
-    // NEW METHOD: Direct SD card access when MediaManager fails
-    private void tryDirectSDCardAccess() {
-        Log.d(TAG, "Attempting direct SD card access for latest photo");
-
-        new Thread(new Runnable() {
+        // Wait a bit for the DJI camera to process and save the photo
+        handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                Bitmap latestPhoto = findLatestPhotoOnSDCard();
+                attemptPhotoFetch();
+            }
+        }, 3000); // Initial wait of 3 seconds
+    }
 
-                post(new Runnable() {
+    // ENHANCED: Single photo fetch attempt with comprehensive error handling
+    private void attemptPhotoFetch() {
+        if (!isPhotoFetchInProgress) {
+            Log.d(TAG, "Photo fetch cancelled - no longer in progress");
+            return;
+        }
+
+        Log.d(TAG, "📸 Attempt " + (photoFetchRetryCount + 1) + "/" + MAX_PHOTO_FETCH_RETRIES + " to fetch photo");
+        updateStatus("Tentativa " + (photoFetchRetryCount + 1) + " de buscar foto...");
+
+        // Check if we have proper setup
+        if (!validatePhotoFetchSetup()) {
+            handlePhotoFetchFailure("Setup de busca de foto inválido");
+            return;
+        }
+
+        // Start the fetch process
+        refreshFileListForPhotoFetch();
+    }
+
+    // ENHANCED: Validate that we have everything needed for photo fetching
+    private boolean validatePhotoFetchSetup() {
+        if (camera == null) {
+            Log.e(TAG, "❌ Camera is null");
+            return false;
+        }
+
+        if (mediaManager == null) {
+            Log.e(TAG, "❌ MediaManager is null");
+            setupMediaManagerForPhotoFetching(); // Try to re-initialize
+            return mediaManager != null;
+        }
+
+        if (scheduler == null) {
+            Log.e(TAG, "❌ Scheduler is null");
+            return false;
+        }
+
+        return true;
+    }
+
+    // ENHANCED: Refresh file list with comprehensive error handling
+    private void refreshFileListForPhotoFetch() {
+        Log.d(TAG, "🔄 Refreshing file list for storage: " + storageLocation);
+
+        mediaManager.refreshFileListOfStorageLocation(storageLocation, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    Log.d(TAG, "✅ File list refresh successful");
+                    // Small delay to ensure file list is fully updated
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            getLatestPhotoFromFileList();
+                        }
+                    }, 1000);
+                } else {
+                    Log.e(TAG, "❌ File list refresh failed: " + djiError.getDescription());
+
+                    // Try alternative storage location
+                    if (storageLocation == SettingsDefinitions.StorageLocation.INTERNAL_STORAGE) {
+                        Log.d(TAG, "🔄 Trying SD card as alternative storage");
+                        storageLocation = SettingsDefinitions.StorageLocation.SDCARD;
+                        refreshFileListForPhotoFetch();
+                    } else {
+                        Log.d(TAG, "🔄 Trying internal storage as alternative");
+                        storageLocation = SettingsDefinitions.StorageLocation.INTERNAL_STORAGE;
+                        refreshFileListForPhotoFetch();
+                    }
+                }
+            }
+        });
+    }
+
+    // ENHANCED: Get latest photo from file list with better filtering
+    private void getLatestPhotoFromFileList() {
+        if (!isPhotoFetchInProgress) {
+            Log.d(TAG, "Photo fetch cancelled during file list processing");
+            return;
+        }
+
+        Log.d(TAG, "📁 Getting latest photo from file list");
+
+        List<MediaFile> mediaFiles;
+        if (storageLocation == SettingsDefinitions.StorageLocation.SDCARD) {
+            mediaFiles = mediaManager.getSDCardFileListSnapshot();
+        } else {
+            mediaFiles = mediaManager.getInternalStorageFileListSnapshot();
+        }
+
+        if (mediaFiles != null && !mediaFiles.isEmpty()) {
+            Log.d(TAG, "📋 Found " + mediaFiles.size() + " media files");
+
+            // Find the most recent photo that was taken after we started the photo process
+            MediaFile latestPhoto = findMostRecentPhoto(mediaFiles);
+
+            if (latestPhoto != null) {
+                Log.d(TAG, "📸 Latest photo found: " + latestPhoto.getFileName() +
+                        ", Size: " + latestPhoto.getFileSize() + " bytes");
+
+                fetchPhotoContent(latestPhoto);
+            } else {
+                Log.w(TAG, "⚠️ No suitable recent photo found");
+                handlePhotoFetchRetry("Nenhuma foto recente encontrada");
+            }
+        } else {
+            Log.w(TAG, "⚠️ Media file list is empty");
+            handlePhotoFetchRetry("Lista de arquivos vazia");
+        }
+    }
+
+    // ENHANCED: Find most recent photo with better filtering
+    private MediaFile findMostRecentPhoto(List<MediaFile> mediaFiles) {
+        MediaFile mostRecent = null;
+        long mostRecentTime = lastPhotoTakenTime - 1000; // Allow 1 seconds before our photo process started
+
+        for (MediaFile mediaFile : mediaFiles) {
+            // Only consider photo files
+            if (mediaFile.getMediaType() == MediaFile.MediaType.JPEG ||
+                    mediaFile.getMediaType() == MediaFile.MediaType.RAW_DNG) {
+
+                long fileTime = mediaFile.getTimeCreated();
+
+                Log.d(TAG, "🔍 Checking photo: " + mediaFile.getFileName() +
+                        ", Created: " + new java.util.Date(fileTime) +
+                        ", Size: " + mediaFile.getFileSize());
+
+                if (fileTime > mostRecentTime) {
+                    mostRecent = mediaFile;
+                    mostRecentTime = fileTime;
+                }
+            }
+        }
+
+        if (mostRecent != null) {
+            Log.d(TAG, "✅ Selected most recent photo: " + mostRecent.getFileName() +
+                    ", Created: " + new java.util.Date(mostRecentTime));
+        }
+
+        return mostRecent;
+    }
+
+    // ENHANCED: Fetch photo content with multiple fallback strategies
+    private void fetchPhotoContent(MediaFile mediaFile) {
+        if (!isPhotoFetchInProgress) {
+            Log.d(TAG, "Photo fetch cancelled during content fetch");
+            return;
+        }
+
+        Log.d(TAG, "📥 Fetching photo content for: " + mediaFile.getFileName());
+        updateStatus("Carregando foto: " + mediaFile.getFileName());
+
+        // Try thumbnail first (faster)
+        FetchMediaTask thumbnailTask = new FetchMediaTask(mediaFile, FetchMediaTaskContent.THUMBNAIL,
+                new FetchMediaTask.Callback() {
                     @Override
-                    public void run() {
-                        if (latestPhoto != null) {
-                            Log.d(TAG, "✅ Found photo via direct SD access");
-                            lastPhotoTaken = latestPhoto;
-                            updateStatus("Foto encontrada no cartão SD");
-                            showPhotoConfirmationDialog(latestPhoto);
+                    public void onUpdate(MediaFile file, FetchMediaTaskContent content, DJIError error) {
+                        if (!isPhotoFetchInProgress) {
+                            Log.d(TAG, "Photo fetch cancelled during thumbnail fetch");
+                            return;
+                        }
+
+                        if (error == null && content == FetchMediaTaskContent.THUMBNAIL) {
+                            Bitmap thumbnail = file.getThumbnail();
+                            if (thumbnail != null) {
+                                Log.d(TAG, "✅ Thumbnail fetched successfully");
+                                handlePhotoFetchSuccess(thumbnail);
+                            } else {
+                                Log.w(TAG, "⚠️ Thumbnail is null, trying preview");
+                                fetchPhotoPreview(mediaFile);
+                            }
                         } else {
-                            Log.w(TAG, "⚠️ No photo found via direct access");
-                            updateStatus("Nenhuma foto encontrada no cartão");
-                            // SHOW ERROR DIALOG INSTEAD OF SIMULATION
-                            showPhotoErrorDialog();
+                            Log.e(TAG, "❌ Thumbnail fetch failed: " + (error != null ? error.getDescription() : "Unknown"));
+                            fetchPhotoPreview(mediaFile);
                         }
                     }
                 });
-            }
-        }).start();
+
+        scheduler.moveTaskToNext(thumbnailTask);
     }
 
-    // NEW METHOD: Find latest photo directly from SD card
-    private Bitmap findLatestPhotoOnSDCard() {
-        try {
-            // Common DJI photo storage paths
-            String[] possiblePaths = {
-                    "/storage/emulated/0/DCIM/Camera/",
-                    "/storage/emulated/0/DCIM/100MEDIA/",
-                    "/storage/sdcard1/DCIM/Camera/",
-                    "/storage/sdcard1/DCIM/100MEDIA/",
-                    Environment.getExternalStorageDirectory() + "/DCIM/Camera/",
-                    Environment.getExternalStorageDirectory() + "/DCIM/100MEDIA/"
-            };
-
-            File latestPhotoFile = null;
-            long latestTime = 0;
-
-            for (String path : possiblePaths) {
-                File directory = new File(path);
-                if (directory.exists() && directory.isDirectory()) {
-                    Log.d(TAG, "Checking directory: " + path);
-
-                    File[] files = directory.listFiles();
-                    if (files != null) {
-                        for (File file : files) {
-                            if (file.isFile() && isImageFile(file.getName()) &&
-                                    file.lastModified() > latestTime) {
-                                latestTime = file.lastModified();
-                                latestPhotoFile = file;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (latestPhotoFile != null) {
-                Log.d(TAG, "Latest photo found: " + latestPhotoFile.getAbsolutePath());
-                Log.d(TAG, "Photo timestamp: " + new java.util.Date(latestPhotoFile.lastModified()));
-
-                // Decode the image file to bitmap
-                BitmapFactory.Options options = new BitmapFactory.Options();
-                options.inSampleSize = 4; // Reduce size for preview
-                return BitmapFactory.decodeFile(latestPhotoFile.getAbsolutePath(), options);
-            }
-
-        } catch (Exception e) {
-            Log.e(TAG, "Error accessing SD card directly: " + e.getMessage(), e);
+    // ENHANCED: Fetch preview as fallback
+    private void fetchPhotoPreview(MediaFile mediaFile) {
+        if (!isPhotoFetchInProgress) {
+            Log.d(TAG, "Photo fetch cancelled during preview fetch");
+            return;
         }
 
-        return null;
+        Log.d(TAG, "🖼️ Fetching photo preview as fallback");
+        updateStatus("Carregando preview da foto...");
+
+        FetchMediaTask previewTask = new FetchMediaTask(mediaFile, FetchMediaTaskContent.PREVIEW,
+                new FetchMediaTask.Callback() {
+                    @Override
+                    public void onUpdate(MediaFile file, FetchMediaTaskContent content, DJIError error) {
+                        if (!isPhotoFetchInProgress) {
+                            Log.d(TAG, "Photo fetch cancelled during preview fetch");
+                            return;
+                        }
+
+                        if (error == null && content == FetchMediaTaskContent.PREVIEW) {
+                            Bitmap preview = file.getPreview();
+                            if (preview != null) {
+                                Log.d(TAG, "✅ Preview fetched successfully");
+                                handlePhotoFetchSuccess(preview);
+                            } else {
+                                Log.w(TAG, "⚠️ Preview is also null");
+                                handlePhotoFetchRetry("Preview da foto não disponível");
+                            }
+                        } else {
+                            Log.e(TAG, "❌ Preview fetch failed: " + (error != null ? error.getDescription() : "Unknown"));
+                            handlePhotoFetchRetry("Erro ao carregar preview: " + (error != null ? error.getDescription() : "Desconhecido"));
+                        }
+                    }
+                });
+
+        scheduler.moveTaskToNext(previewTask);
     }
 
-    // Helper method to check if file is an image
-    private boolean isImageFile(String filename) {
-        String lower = filename.toLowerCase();
-        return lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
-                lower.endsWith(".png") || lower.endsWith(".dng");
+    // ENHANCED: Handle successful photo fetch
+    private void handlePhotoFetchSuccess(Bitmap photo) {
+        isPhotoFetchInProgress = false;
+        photoFetchRetryCount = 0;
+
+        Log.d(TAG, "🎉 Photo fetch SUCCESS! Showing confirmation dialog");
+
+        post(new Runnable() {
+            @Override
+            public void run() {
+                lastPhotoTaken = photo;
+                updateStatus("Foto carregada com sucesso!");
+                showPhotoConfirmationDialog(photo);
+            }
+        });
     }
 
-    // NEW METHOD: Show error dialog when real photo cannot be found
+    // ENHANCED: Handle photo fetch retry logic
+    private void handlePhotoFetchRetry(String reason) {
+        photoFetchRetryCount++;
+
+        Log.w(TAG, "⚠️ Photo fetch attempt " + photoFetchRetryCount + " failed: " + reason);
+
+        if (photoFetchRetryCount < MAX_PHOTO_FETCH_RETRIES) {
+            Log.d(TAG, "🔄 Retrying photo fetch in " + (PHOTO_FETCH_RETRY_DELAY / 1000) + " seconds...");
+            updateStatus("Tentativa " + photoFetchRetryCount + " falhou. Tentando novamente...");
+
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    attemptPhotoFetch();
+                }
+            }, PHOTO_FETCH_RETRY_DELAY);
+        } else {
+            handlePhotoFetchFailure("Máximo de tentativas atingido: " + reason);
+        }
+    }
+
+    // ENHANCED: Handle complete photo fetch failure
+    private void handlePhotoFetchFailure(String reason) {
+        isPhotoFetchInProgress = false;
+        photoFetchRetryCount = 0;
+
+        Log.e(TAG, "❌ Photo fetch FAILED completely: " + reason);
+
+        post(new Runnable() {
+            @Override
+            public void run() {
+                updateStatus("Falha ao carregar foto: " + reason);
+                showPhotoErrorDialog();
+            }
+        });
+    }
+
+    // MODIFIED: Show error dialog when real photo cannot be loaded
     private void showPhotoErrorDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
         builder.setTitle("Erro ao Carregar Foto")
-                .setMessage("Não foi possível carregar a foto do cartão SD. Deseja tentar novamente ou pular esta foto?")
+                .setMessage("Não foi possível carregar a foto do drone após " + MAX_PHOTO_FETCH_RETRIES +
+                        " tentativas. Deseja tentar novamente ou continuar sem foto?")
                 .setPositiveButton("Tentar Novamente", new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface dialog, int which) {
                         dialog.dismiss();
-                        updateStatus("Tentando novamente...");
-                        takeRealPhoto();
+                        updateStatus("Tentando buscar foto novamente...");
+                        fetchLatestDronePhotoWithRetry();
                     }
                 })
-                .setNegativeButton("Pular Foto", new android.content.DialogInterface.OnClickListener() {
+                .setNegativeButton("Continuar Missão", new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface dialog, int which) {
                         dialog.dismiss();
-                        updateStatus("Foto pulada - continuando missão...");
-                        // Continue mission without photo
+                        updateStatus("Continuando missão sem confirmação de foto...");
+                        // Continue mission without photo confirmation
                         resumeMissionAutomatically();
                     }
                 })
@@ -2553,26 +2563,9 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 .show();
     }
 
-    private void simulatePhoto() {
-        Log.d(TAG, "Simulating photo in simulator mode");
-
-        Bitmap bitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
-
-        int r = (currentInspectionIndex * 50) % 255;
-        int g = (currentPhotoIndex * 40) % 255;
-        int b = (currentInspectionIndex * currentPhotoIndex * 30) % 255;
-
-        bitmap.eraseColor(Color.rgb(r, g, b));
-
-        lastPhotoTaken = bitmap;
-        isWaitingForReview = true;
-
-        Log.d(TAG, "Simulated photo created with colors R:" + r + " G:" + g + " B:" + b);
-    }
-
-    // AUTOMATIC PHOTO CONFIRMATION DIALOG
+    // ENHANCED: Photo confirmation dialog with real drone photo
     private void showPhotoConfirmationDialog(Bitmap photo) {
-        Log.d(TAG, "Showing photo confirmation dialog");
+        Log.d(TAG, "📱 Showing photo confirmation dialog");
 
         AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
 
@@ -2602,8 +2595,8 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
             public void onClick(View v) {
                 dialog.dismiss();
                 updateStatus("Tirando nova foto...");
-                // REMOVED SIMULATION - Always try real camera
-                takeRealPhoto();
+                // Re-fetch the latest photo (DJI might have taken another one)
+                fetchLatestDronePhotoWithRetry();
             }
         });
 
@@ -2617,7 +2610,7 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
                 isWaitingForReview = false;
                 updateStatus("Foto aceita. Retomando missão automaticamente...");
 
-                // AUTOMATIC RESUME - NO BUTTON NEEDED
+                // AUTOMATIC RESUME
                 new Handler().postDelayed(new Runnable() {
                     @Override
                     public void run() {
@@ -2630,13 +2623,24 @@ public class StructureInspectionMissionView extends MissionBaseView implements P
         dialog.show();
     }
 
-    // FORCE PHOTO REVIEW FOR MANUAL BUTTON
+    // FORCE PHOTO REVIEW FOR MANUAL BUTTON - ENHANCED
     public void forcePhotoReview() {
         Log.d(TAG, "🔧 MANUAL photo review triggered");
+
+        // Set force flag
         forceNextPhotoReview = true;
 
-        // ALWAYS TRY REAL CAMERA - REMOVED SIMULATOR MODE CHECK
-        takeRealPhoto();
+        // If no mission is running, just fetch the latest photo
+        if (waypointMissionOperator == null ||
+                waypointMissionOperator.getCurrentState() != WaypointMissionState.EXECUTING) {
+
+            Log.d(TAG, "🔧 No active mission - fetching latest photo directly");
+            updateStatus("Buscando última foto tirada...");
+            fetchLatestDronePhotoWithRetry();
+        } else {
+            // Mission is running - trigger the normal photo review process
+            triggerPhotoReview();
+        }
     }
 
     private void savePhotoToStorage(Bitmap photo) {
